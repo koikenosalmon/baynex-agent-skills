@@ -1,0 +1,28 @@
+{
+  "name": "baynex-agent-skills",
+  "version": "0.1.0",
+  "description": "Portable Agent Skills and an MCP adapter for Baynex specifications",
+  "author": {
+    "name": "Baynex"
+  },
+  "homepage": "https://github.com/koikenosalmon/baynex-agent-skills",
+  "repository": "https://github.com/koikenosalmon/baynex-agent-skills",
+  "license": "MIT",
+  "keywords": ["baynex", "agent-skills", "mcp", "specifications", "ui-definitions"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Baynex Agent Skills",
+    "shortDescription": "Read and safely update Baynex specifications and UI definitions.",
+    "longDescription": "Portable Agent Skills for reading Baynex product context, applying Slack-audited specification changes, and managing stateful HTML UI definitions through the authorized Baynex MCP server.",
+    "developerName": "Baynex",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/koikenosalmon/baynex-agent-skills",
+    "defaultPrompt": [
+      "Read the relevant Baynex specification before implementation.",
+      "Apply this Slack-approved specification change safely.",
+      "Inspect the UI states linked to this requirement."
+    ]
+  }
+}

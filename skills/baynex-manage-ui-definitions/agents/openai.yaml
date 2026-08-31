@@ -1,0 +1,4 @@
+interface:
+  display_name: "Baynex: Manage UI definitions"
+  short_description: "Read and update stateful HTML UI definitions safely"
+  default_prompt: "Use $baynex-manage-ui-definitions to inspect or update the UI definition linked to this specification."

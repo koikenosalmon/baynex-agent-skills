@@ -1,0 +1,4 @@
+interface:
+  display_name: "Baynex: Update specifications"
+  short_description: "Apply Slack-audited Baynex specification updates"
+  default_prompt: "Use $baynex-update-specifications to apply this approved change through the Baynex MCP writer."

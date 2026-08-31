@@ -1,0 +1,4 @@
+interface:
+  display_name: "Baynex: Read specifications"
+  short_description: "Read Baynex specifications and linked delivery context"
+  default_prompt: "Use $baynex-read-specifications to inspect the relevant Baynex specification before working."

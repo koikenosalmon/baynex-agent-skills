@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "baynex-specifications": {
+      "command": "node",
+      "args": ["./scripts/baynex-mcp-stdio.mjs"],
+      "cwd": ".",
+      "env_vars": [
+        "BAYNEX_MCP_ACCESS_CLIENT_ID",
+        "BAYNEX_MCP_ACCESS_CLIENT_SECRET",
+        "BAYNEX_MCP_TOKEN"
+      ],
+      "tool_timeout_sec": 60
+    }
+  }
+}

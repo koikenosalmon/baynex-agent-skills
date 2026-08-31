@@ -1,0 +1,16 @@
+{
+  "name": "baynex-agent-skills",
+  "version": "0.1.0",
+  "description": "Portable Agent Skills and MCP adapter for Baynex specifications",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:koikenosalmon/baynex-agent-skills",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check scripts/baynex-mcp-stdio.mjs && node --check scripts/validate-distribution.mjs && node scripts/validate-distribution.mjs",
+    "test": "node --test"
+  }
+}
