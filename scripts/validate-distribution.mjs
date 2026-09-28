@@ -2,6 +2,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const root = new URL('../', import.meta.url);
 const skillsRoot = new URL('../skills/', import.meta.url);
@@ -9,6 +10,7 @@ const expectedSkills = new Set([
   'baynex-read-specifications',
   'baynex-update-specifications',
   'baynex-manage-ui-definitions',
+  'baynex-app-distribution-setup',
 ]);
 
 function assert(condition, message) {
@@ -50,5 +52,28 @@ const mcp = JSON.parse(await readFile(new URL('.mcp.json', root), 'utf8'));
 const server = mcp.mcpServers?.['baynex-specifications'];
 assert(server?.command === 'node' && server.args?.[0] === './scripts/baynex-mcp-stdio.mjs', 'invalid MCP adapter config');
 assert(server.env_vars?.length === 3, 'MCP config must declare only canonical credential names');
+
+export async function validateKitLayout(kitRoot = new URL('../app-distribution/', import.meta.url), workflowRoot = new URL('../.github/workflows/', import.meta.url)) {
+  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'baynex-release-notes.sh'];
+  for (const file of scripts) {
+    const source = await readFile(new URL(`scripts/${file}`, kitRoot), 'utf8');
+    assert(source.length > 0, `${file}: empty kit script`);
+    if (file !== 'config.mjs') {
+      const test = await readFile(new URL(`scripts/${file.replace(/\.(mjs|sh)$/, '.test.mjs')}`, kitRoot), 'utf8');
+      assert(test.includes("node:test"), `${file}: missing node:test suite`);
+    }
+  }
+  for (const file of ['bootstrap.mjs', 'add-apple-account.mjs', 'grant-apple-account.mjs', 'README.md']) assert((await readFile(new URL(file, kitRoot), 'utf8')).length > 0, `missing ${file}`);
+  for (const file of ['app-distribution.yml', 'app-distribution-check.yml']) {
+    const workflow = await readFile(new URL(file, workflowRoot), 'utf8');
+    assert(workflow.includes('workflow_call:'), `${file}: reusable workflow missing`);
+    assert(workflow.includes('kit-ref:'), `${file}: kit-ref input missing`);
+    assert(workflow.includes('DISTRIBUTION_CONFIG:'), `${file}: caller config input missing`);
+    assert(!/--testers\b|--groups\b/.test(workflow), `${file}: uploads must leave tester groups to Baynex`);
+    const caller = await readFile(new URL(`templates/caller-${file}`, kitRoot), 'utf8');
+    assert(caller.includes('id-token: write') && caller.includes(`workflows/${file}@v1`), `${file}: caller template invalid`);
+  }
+}
+await validateKitLayout();
 
 process.stdout.write('Distribution validation passed.\n');
