@@ -11,7 +11,7 @@ export function grantAppleAccount({ slug, serviceAccount, sharedProject = 'bayne
       throw new Error(`secret がありません: ${name}`);
     }
     if (dryRun) { report('⚠️', `${name}: secretAccessor を付与予定`); continue; }
-    gcloud(['secrets', 'add-iam-policy-binding', name, `--project=${sharedProject}`, `--member=serviceAccount:${serviceAccount}`, '--role=roles/secretmanager.secretAccessor', '--quiet', '--format=none']);
+    gcloud(['secrets', 'add-iam-policy-binding', name, `--project=${sharedProject}`, `--member=serviceAccount:${serviceAccount}`, '--role=roles/secretmanager.secretAccessor', '--condition=None', '--quiet', '--format=none']);
     report('✅', `${name}: 読み取り権限を確認しました`);
   }
 }

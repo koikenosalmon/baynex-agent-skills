@@ -10,7 +10,7 @@ import { validateApps } from './scripts/app-store-connect.mjs';
 const apis = ['iam.googleapis.com', 'iamcredentials.googleapis.com', 'sts.googleapis.com', 'firebaseappdistribution.googleapis.com', 'firebase.googleapis.com'];
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-export function pairApps(ios, android, oldApps = [], appleAccount) {
+export function pairApps(ios, android, oldApps = [], appleAccount, { includeNew = true } = {}) {
   const key = (row, platform) => {
     const display = String(row.displayName || '').toLowerCase().replace(/\b(ios|android|dev|qa)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
     const identifier = String(platform === 'ios' ? row.bundleId : row.packageName);
@@ -25,9 +25,10 @@ export function pairApps(ios, android, oldApps = [], appleAccount) {
     if (matches.length !== 1) { report('⚠️', `${i.displayName || i.bundleId}: Android と一意に対応せず除外`); continue; }
     const d = matches[0]; used.add(d.appId);
     const old = oldApps.find((row) => row.firebaseAppIds?.ios === i.appId || row.iosBundleId === i.bundleId);
+    if (!old && !includeNew) { report('⚠️', `${i.displayName || i.bundleId}: 新しい候補です。追加するときは --include-new を付けて再実行してください`); continue; }
     const suffix = a.suffix?.replace(/[^a-z0-9-]/g, '-') || '';
     const id = old?.id || (/^[a-z]/.test(suffix) ? suffix : `app-${suffix || paired.length + 1}`);
-    paired.push({ id, displayName: i.displayName || d.displayName || id,
+    paired.push({ id, displayName: old?.displayName || i.displayName || d.displayName || id,
       flavor: old?.flavor || 'TODO', target: old?.target || 'TODO',
       iosBundleId: i.bundleId, androidPackage: d.packageName,
       firebaseAppIds: { ios: i.appId, android: d.appId }, appleAccount: old?.appleAccount || appleAccount,
@@ -57,11 +58,11 @@ async function listFirebaseApps(project, platform, token, fetchImpl = fetch) {
   return apps;
 }
 
-export async function bootstrap({ project, repo, appleAccount, short, appDir = 'native', out = 'distribution/apps.json', dryRun = false }, deps = {}) {
+export async function bootstrap({ project, repo, appleAccount, short, appDir, out = 'distribution/apps.json', dryRun = false, includeNew = false }, deps = {}) {
   if (!projectPattern.test(project || '') || !repoPattern.test(repo || '') || !slugPattern.test(appleAccount || '')) throw new Error('project、repo、apple-account を確認してください');
   short ||= project.replace(/-(dev|prod|staging|qa)$/, '');
   if (!slugPattern.test(short) || short.length > 18) throw new Error('short は 2～18 文字の小文字・数字・ハイフンにしてください');
-  if (!/^[A-Za-z0-9_./-]+$/.test(appDir) || appDir.includes('..') || !/^[A-Za-z0-9_./-]+\.json$/.test(out) || out.includes('..')) throw new Error('app-dir または out が不正です');
+  if ((appDir && (!/^[A-Za-z0-9_./-]+$/.test(appDir) || appDir.includes('..'))) || !/^[A-Za-z0-9_./-]+\.json$/.test(out) || out.includes('..')) throw new Error('app-dir または out が不正です');
   const run = deps.gcloud || gcloud;
   const fetchImpl = deps.fetch || fetch;
   const number = run(['projects', 'describe', project, '--format=value(projectNumber)']);
@@ -82,8 +83,8 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir = '
   const principal = `principalSet://iam.googleapis.com/projects/${number}/locations/global/workloadIdentityPools/${pool}/attribute.repository/${repo}`;
   if (dryRun) report('⚠️', 'Firebase 管理者と WIF 利用権限を付与予定');
   else {
-    run(['projects', 'add-iam-policy-binding', project, `--member=serviceAccount:${serviceAccount}`, '--role=roles/firebaseappdistro.admin', '--quiet', '--format=none']);
-    run(['iam', 'service-accounts', 'add-iam-policy-binding', serviceAccount, `--project=${project}`, `--member=${principal}`, '--role=roles/iam.workloadIdentityUser', '--quiet', '--format=none']);
+    run(['projects', 'add-iam-policy-binding', project, `--member=serviceAccount:${serviceAccount}`, '--role=roles/firebaseappdistro.admin', '--condition=None', '--quiet', '--format=none']);
+    run(['iam', 'service-accounts', 'add-iam-policy-binding', serviceAccount, `--project=${project}`, `--member=${principal}`, '--role=roles/iam.workloadIdentityUser', '--condition=None', '--quiet', '--format=none']);
     report('✅', 'Firebase 管理者と WIF 利用権限を確認しました');
   }
   if (deps.grantAppleAccount) deps.grantAppleAccount({ slug: appleAccount, serviceAccount, dryRun });
@@ -94,7 +95,9 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir = '
   const android = await listFirebaseApps(project, 'android', token, fetchImpl);
   let previous = {};
   try { previous = JSON.parse(await readFile(out, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const apps = pairApps(ios, android, previous.apps, appleAccount);
+  appDir ||= previous.appDir || 'native';
+  if (!/^[A-Za-z0-9_./-]+$/.test(appDir) || appDir.includes('..')) throw new Error('app-dir が不正です');
+  const apps = pairApps(ios, android, previous.apps, appleAccount, { includeNew: includeNew || !previous.apps?.length });
   if (!apps.length) throw new Error('iOS と Android のペアが見つかりません');
   if (new Set(apps.map((app) => app.id)).size !== apps.length) throw new Error('アプリ ID が重複しています。識別子の組を確認してください');
   const config = { appDir, firebaseProject: project, gcp: { workloadIdentityProvider: provider, uploaderServiceAccount: serviceAccount }, apps,
@@ -108,7 +111,7 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir = '
       fetch: (url, options) => fetchImpl(url, { ...options, headers: { ...options.headers, 'x-goog-user-project': project } }) });
     report('✅', `${app.id} ${platform}: ${state === 'started' ? 'App Distribution を開始' : '開始済み'}`);
   }
-  report('⚠️', 'apps.json の flavor / target の TODO をアプリチームと確認してください。');
+  if (apps.some((app) => app.flavor === 'TODO' || app.target === 'TODO')) report('⚠️', 'apps.json の flavor / target の TODO をアプリチームと確認してください。');
   report('⚠️', 'IAM の反映には約 5 分かかることがあります。');
   for (const [template, destination] of [
     ['caller-app-distribution.yml', '.github/workflows/app-distribution.yml'],
@@ -122,7 +125,7 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir = '
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const args = parseArgs(process.argv.slice(2), { '--project': 'string', '--repo': 'string', '--apple-account': 'string', '--short': 'string', '--app-dir': 'string', '--out': 'string', '--dry-run': 'boolean' });
-    await bootstrap({ project: args.project, repo: args.repo, appleAccount: args['apple-account'], short: args.short, appDir: args['app-dir'], out: args.out, dryRun: args['dry-run'] });
+    const args = parseArgs(process.argv.slice(2), { '--project': 'string', '--repo': 'string', '--apple-account': 'string', '--short': 'string', '--app-dir': 'string', '--out': 'string', '--dry-run': 'boolean', '--include-new': 'boolean' });
+    await bootstrap({ project: args.project, repo: args.repo, appleAccount: args['apple-account'], short: args.short, appDir: args['app-dir'], out: args.out, dryRun: args['dry-run'], includeNew: args['include-new'] });
   } catch (error) { report('❌', error.message); process.exitCode = 1; }
 }
