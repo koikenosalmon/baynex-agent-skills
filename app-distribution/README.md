@@ -11,7 +11,7 @@ Flutter アプリの GitHub リポジトリを Baynex「アプリ配布」に接
 
 ## 新しいプロジェクト
 
-Node.js 20 以上と `gcloud` を用意します。Firebase iOS / Android アプリが属する GCP プロジェクトで操作権限が必要です。アプリリポジトリのルートから、キットを隣のディレクトリに clone して実行します。`v1` タグの公開後は次のコマンドを使います。
+Node.js 20 以上と `gcloud` を用意します。Firebase iOS / Android アプリが属する GCP プロジェクトで操作権限が必要です。アプリリポジトリのルートから、キットを隣のディレクトリに clone して実行します。
 
 ```sh
 gcloud auth login --no-launch-browser
@@ -32,7 +32,7 @@ cp ../baynex-agent-skills/app-distribution/templates/caller-app-distribution.yml
 cp ../baynex-agent-skills/app-distribution/templates/caller-app-distribution-check.yml .github/workflows/app-distribution-check.yml
 ```
 
-両 caller は `permissions: contents: read, id-token: write` と `secrets: inherit` を含みます。`config-path` を変更した場合は `distribution/apps.json` の場所に合わせます。テンプレートの `@v1` と `kit-ref: v1` はキットの同じリリースを指します。**v1 タグはこの変更のレビュー後にオペレーターが作成します。** タグが存在するまで caller workflow は動きません。
+両 caller は `permissions: contents: read, id-token: write` と `secrets: inherit` を含みます。`config-path` を変更した場合は `distribution/apps.json` の場所に合わせます。テンプレートの `@v1` と `kit-ref: v1` はキットのリリースブランチ `v1` を指します。キットの修正は `main` にマージしたあと `v1` を同じコミットまで進めると、全プロジェクトの次の実行に反映されます（`git push origin origin/main:v1`）。互換性のない変更は `v2` ブランチで出します。
 
 `apps.json` と caller workflow 2 件をコミットしてから、確認 workflow を実行します。
 
