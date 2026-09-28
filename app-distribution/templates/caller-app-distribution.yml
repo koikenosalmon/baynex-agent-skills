@@ -1,0 +1,20 @@
+name: App Distribution
+on:
+  push:
+    branches:
+      - qa
+      - 'release/**'
+      - 'ai/feature-*'
+      - 'feature/**'
+      - 'epic/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  distribute:
+    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution.yml@v1
+    with:
+      config-path: distribution/apps.json
+      kit-ref: v1
+    secrets: inherit

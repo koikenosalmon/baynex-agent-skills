@@ -1,0 +1,348 @@
+name: App Distribution
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        type: string
+        default: distribution/apps.json
+      kit-ref:
+        type: string
+        default: v1
+
+env:
+  DISTRIBUTION_CONFIG: ${{ inputs.config-path }}
+
+concurrency:
+  group: app-distribution-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      app_present: ${{ steps.config.outputs.app_present }}
+      app_dir: ${{ steps.config.outputs.app_dir }}
+      matrix: ${{ steps.config.outputs.matrix }}
+      product_id: ${{ steps.config.outputs.product_id }}
+      wif_ready: ${{ steps.config.outputs.wif_ready }}
+      wif_provider: ${{ steps.config.outputs.wif_provider }}
+      wif_service_account: ${{ steps.config.outputs.wif_service_account }}
+      android_signing: ${{ steps.config.outputs.android_signing }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: koikenosalmon/baynex-agent-skills
+          ref: ${{ inputs.kit-ref }}
+          path: .baynex-app-distribution-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - id: config
+        name: Check app and prerequisites
+        env:
+          PRODUCT_ID_OVERRIDE: ${{ vars.BAYNEX_PRODUCT_ID }}
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ vars.FIREBASE_UPLOADER_SERVICE_ACCOUNT }}
+          ANDROID_KEYSTORE_SET: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+          ANDROID_STORE_PASSWORD_SET: ${{ secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
+          ANDROID_ALIAS_SET: ${{ secrets.ANDROID_KEY_ALIAS != '' }}
+          ANDROID_KEY_PASSWORD_SET: ${{ secrets.ANDROID_KEY_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; import { validateApps } from "./.baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs"; validateApps(JSON.parse(readFileSync(process.env.DISTRIBUTION_CONFIG, "utf8")));'
+          app_dir=$(jq -r '.appDir // "native"' "$DISTRIBUTION_CONFIG")
+          product_id=$PRODUCT_ID_OVERRIDE
+          if [[ -z "$product_id" && -f baynex/config.json ]]; then product_id=$(jq -r '.productId // empty' baynex/config.json); fi
+          echo "app_dir=$app_dir" >> "$GITHUB_OUTPUT"
+          echo "product_id=$product_id" >> "$GITHUB_OUTPUT"
+          jq -c '.apps' "$DISTRIBUTION_CONFIG" | sed 's/^/matrix=/' >> "$GITHUB_OUTPUT"
+          wif_provider=${WIF_PROVIDER:-$(jq -r '.gcp.workloadIdentityProvider // empty' "$DISTRIBUTION_CONFIG")}
+          wif_service_account=${WIF_SERVICE_ACCOUNT:-$(jq -r '.gcp.uploaderServiceAccount // empty' "$DISTRIBUTION_CONFIG")}
+          echo "wif_provider=$wif_provider" >> "$GITHUB_OUTPUT"
+          echo "wif_service_account=$wif_service_account" >> "$GITHUB_OUTPUT"
+          if [[ -f "$app_dir/pubspec.yaml" ]]; then
+            if jq -e 'any(.apps[]; .flavor == "TODO" or .target == "TODO")' "$DISTRIBUTION_CONFIG" >/dev/null; then
+              echo 'apps.json の flavor / target の TODO を確定してください' >&2
+              exit 1
+            fi
+            echo 'app_present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'app_present=false' >> "$GITHUB_OUTPUT"
+            echo "アプリ本体（$app_dir/pubspec.yaml）がまだないため、配布をスキップしました。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$wif_provider" && -n "$wif_service_account" ]]; then
+            echo 'wif_ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'wif_ready=false' >> "$GITHUB_OUTPUT"
+            echo '- アップロード未設定: GCP_WIF_PROVIDER / FIREBASE_UPLOADER_SERVICE_ACCOUNT' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ "$ANDROID_KEYSTORE_SET" == true && "$ANDROID_STORE_PASSWORD_SET" == true && "$ANDROID_ALIAS_SET" == true && "$ANDROID_KEY_PASSWORD_SET" == true ]]; then
+            echo 'android_signing=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'android_signing=false' >> "$GITHUB_OUTPUT"
+            echo '- Android リリース署名未設定（任意）: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  android:
+    needs: detect
+    if: needs.detect.outputs.app_present == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    name: Android / ${{ matrix.app.displayName }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: koikenosalmon/baynex-agent-skills
+          ref: ${{ inputs.kit-ref }}
+          path: .baynex-app-distribution-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        run: flutter pub get
+      - name: Configure optional release signing
+        if: needs.detect.outputs.android_signing == 'true'
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload-keystore.jks"
+          {
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/upload-keystore.jks"
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > "$RUNNER_TEMP/key.properties"
+          ln -s "$RUNNER_TEMP/key.properties" android/key.properties
+          chmod 600 "$RUNNER_TEMP/key.properties" "$RUNNER_TEMP/upload-keystore.jks"
+      - id: build
+        name: Build APK
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+          FLAVOR: ${{ matrix.app.flavor }}
+          TARGET: ${{ matrix.app.target }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          args=(--flavor "$FLAVOR" -t "$TARGET" --release --build-number="$RUN_NUMBER")
+          if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
+          flutter build apk "${args[@]}"
+          artifact="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
+          test -f "$artifact"
+          echo "artifact=$PWD/$artifact" >> "$GITHUB_OUTPUT"
+      - name: Write release notes
+        run: .baynex-app-distribution-kit/app-distribution/scripts/baynex-release-notes.sh > release-notes.txt
+      - id: google_auth
+        name: Authorize Firebase upload
+        if: needs.detect.outputs.wif_ready == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ needs.detect.outputs.wif_provider }}
+          service_account: ${{ needs.detect.outputs.wif_service_account }}
+      - name: Start Firebase App Distribution
+        if: needs.detect.outputs.wif_ready == 'true'
+        env:
+          FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.android }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/firebase-activate.mjs "$FIREBASE_APP_ID"
+      - id: upload
+        name: Upload to Firebase App Distribution
+        if: needs.detect.outputs.wif_ready == 'true'
+        env:
+          FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.android }}
+          ARTIFACT: ${{ steps.build.outputs.artifact }}
+        run: npx -y firebase-tools@14 appdistribution:distribute "$ARTIFACT" --app "$FIREBASE_APP_ID" --release-notes-file release-notes.txt
+      - name: Remove signing files
+        if: always()
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        run: rm -f android/key.properties "$RUNNER_TEMP/key.properties" "$RUNNER_TEMP/upload-keystore.jks"
+      - name: Distribution summary
+        if: always()
+        env:
+          APP_NAME: ${{ matrix.app.displayName }}
+          PRODUCT_ID: ${{ needs.detect.outputs.product_id }}
+          COMMIT: ${{ github.sha }}
+          WIF_READY: ${{ needs.detect.outputs.wif_ready }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          UPLOAD_RESULT: ${{ steps.upload.outcome }}
+        run: |
+          echo "### $APP_NAME / Android" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ビルド: $BUILD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$WIF_READY" == true ]]; then echo "- Firebase 配布: $UPLOAD_RESULT" >> "$GITHUB_STEP_SUMMARY"; else echo '- Firebase 配布: WIF 未設定のためビルドのみ' >> "$GITHUB_STEP_SUMMARY"; fi
+          if [[ -n "$PRODUCT_ID" ]]; then echo "- [Baynex でこのコミットを開く](https://preview.baynex.jp/products/$PRODUCT_ID?view=apps&commit=$COMMIT)" >> "$GITHUB_STEP_SUMMARY"; fi
+
+  ios:
+    needs: detect
+    if: needs.detect.outputs.app_present == 'true'
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    name: iOS / ${{ matrix.app.displayName }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: koikenosalmon/baynex-agent-skills
+          ref: ${{ inputs.kit-ref }}
+          path: .baynex-app-distribution-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - id: google_auth
+        name: Authorize Secret Manager and Firebase
+        if: needs.detect.outputs.wif_ready == 'true'
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ needs.detect.outputs.wif_provider }}
+          service_account: ${{ needs.detect.outputs.wif_service_account }}
+      - id: credentials
+        name: Load Apple account key
+        env:
+          APPLE_ACCOUNT: ${{ matrix.app.appleAccount }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
+          APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/secret-manager.mjs load-account "$APPLE_ACCOUNT" "$RUNNER_TEMP/apple-account"
+      - uses: subosito/flutter-action@v2
+        if: steps.credentials.outcome == 'success'
+        with:
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        if: steps.credentials.outcome == 'success'
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        run: flutter pub get
+      - id: prepare
+        name: Register bundle ID and tester devices
+        if: steps.credentials.outcome == 'success'
+        env:
+          APP_STORE_CONNECT_ISSUER_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-issuer-id
+          APP_STORE_CONNECT_KEY_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-key-id
+          APP_STORE_CONNECT_KEY_P8_FILE: ${{ runner.temp }}/apple-account/app-store-connect.p8
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
+          FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.ios }}
+          APP_ID: ${{ matrix.app.id }}
+          APP_TEAM_OVERRIDE: ${{ matrix.app.appleTeamId }}
+          WIF_READY: ${{ needs.detect.outputs.wif_ready }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node .baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs ensure-bundle-ids "$APP_ID" > "$RUNNER_TEMP/bundles.json"
+          team=$(jq -r --arg id "$APP_ID" '.bundleIds[] | select(.id == $id) | .teamId // empty' "$RUNNER_TEMP/bundles.json")
+          team=${APP_TEAM_OVERRIDE:-$team}
+          [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || { echo 'Apple Team ID を取得できません' >&2; exit 1; }
+          echo "team_id=$team" >> "$GITHUB_OUTPUT"
+          if [[ "$WIF_READY" != true ]]; then echo 'Firebase WIF が未設定のため端末登録を確認できません' >&2; exit 1; fi
+          node .baynex-app-distribution-kit/app-distribution/scripts/firebase-udids.mjs "$FIREBASE_APP_ID" > "$RUNNER_TEMP/tester-udids.json"
+          node .baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs register-devices "$RUNNER_TEMP/tester-udids.json" > "$RUNNER_TEMP/device-counts.json"
+          jq -r '"登録済み: \(.existing)、新規登録: \(.created)、対象: \(.requested)"' "$RUNNER_TEMP/device-counts.json" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        name: Build cloud-signed IPA
+        if: steps.credentials.outcome == 'success'
+        working-directory: ${{ needs.detect.outputs.app_dir }}
+        env:
+          FLAVOR: ${{ matrix.app.flavor }}
+          TARGET: ${{ matrix.app.target }}
+          RUN_NUMBER: ${{ github.run_number }}
+          BRANCH: ${{ github.ref_name }}
+          TEAM_ID: ${{ steps.prepare.outputs.team_id }}
+        run: |
+          set -euo pipefail
+          args=(--release --no-codesign --flavor "$FLAVOR" -t "$TARGET" --build-number="$RUN_NUMBER")
+          if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
+          flutter build ios "${args[@]}"
+          major=$(xcodebuild -version | awk '/^Xcode / {split($2,a,"."); print a[1]}')
+          method=ad-hoc
+          if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 16 )); then method=release-testing; fi
+          TEAM_ID="$TEAM_ID" EXPORT_METHOD="$method" python3 - <<'PYPLIST'
+          import os, plistlib
+          with open(os.environ['RUNNER_TEMP'] + '/ExportOptions.plist', 'wb') as output:
+              plistlib.dump({'method': os.environ['EXPORT_METHOD'], 'signingStyle': 'automatic',
+                             'teamID': os.environ['TEAM_ID']}, output)
+          PYPLIST
+          key_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-key-id")
+          issuer_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-issuer-id")
+          auth=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/apple-account/app-store-connect.p8" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer_id")
+          xcodebuild archive -workspace ios/Runner.xcworkspace -scheme "$FLAVOR" -archivePath "$RUNNER_TEMP/Runner.xcarchive" "${auth[@]}" CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID"
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" -exportPath "$RUNNER_TEMP/ios-export" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" "${auth[@]}"
+          artifact=$(find "$RUNNER_TEMP/ios-export" -maxdepth 1 -name '*.ipa' -type f -print -quit)
+          test -n "$artifact"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+      - name: Write release notes
+        if: steps.credentials.outcome == 'success'
+        run: .baynex-app-distribution-kit/app-distribution/scripts/baynex-release-notes.sh > release-notes.txt
+      - id: upload_auth
+        name: Refresh Firebase upload authorization
+        if: steps.credentials.outcome == 'success' && needs.detect.outputs.wif_ready == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ needs.detect.outputs.wif_provider }}
+          service_account: ${{ needs.detect.outputs.wif_service_account }}
+      - name: Start Firebase App Distribution
+        if: steps.credentials.outcome == 'success' && needs.detect.outputs.wif_ready == 'true'
+        env:
+          FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.ios }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.upload_auth.outputs.access_token }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/firebase-activate.mjs "$FIREBASE_APP_ID"
+      - id: upload
+        name: Upload to Firebase App Distribution
+        if: steps.credentials.outcome == 'success' && needs.detect.outputs.wif_ready == 'true'
+        env:
+          FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.ios }}
+          ARTIFACT: ${{ steps.build.outputs.artifact }}
+        run: npx -y firebase-tools@14 appdistribution:distribute "$ARTIFACT" --app "$FIREBASE_APP_ID" --release-notes-file release-notes.txt
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/apple-account" && rm -f "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"
+      - name: Distribution summary
+        if: always()
+        env:
+          APP_NAME: ${{ matrix.app.displayName }}
+          PRODUCT_ID: ${{ needs.detect.outputs.product_id }}
+          COMMIT: ${{ github.sha }}
+          SIGNING_READY: ${{ steps.credentials.outcome == 'success' }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          UPLOAD_RESULT: ${{ steps.upload.outcome }}
+        run: |
+          echo "### $APP_NAME / iOS" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$SIGNING_READY" != true ]]; then
+            echo '- Apple アカウントのキーを取得できませんでした。' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- ビルド: $BUILD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Firebase 配布: $UPLOAD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$PRODUCT_ID" ]]; then echo "- [Baynex でこのコミットを開く](https://preview.baynex.jp/products/$PRODUCT_ID?view=apps&commit=$COMMIT)" >> "$GITHUB_STEP_SUMMARY"; fi

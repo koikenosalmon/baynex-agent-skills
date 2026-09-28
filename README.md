@@ -13,6 +13,7 @@ Skillのソースコードは公開されていますが、Baynexの仕様書デ
 | `baynex-read-specifications` | 仕様、構造、カタログ、保証、タスク、関連UIの参照 | なし |
 | `baynex-update-specifications` | Slack監査付きの仕様・構造・カタログ・保証・タスク更新 | あり |
 | `baynex-manage-ui-definitions` | 画面、状態、HTML、仕様リンクの参照・更新 | あり |
+| `baynex-app-distribution-setup` | アプリリポジトリの Baynex「アプリ配布」設定と確認 | GCP / GitHub 設定 |
 
 ## Import
 
@@ -29,6 +30,7 @@ cp -R baynex-agent-skills/skills/baynex-read-specifications .agents/skills/
 ```sh
 cp -R baynex-agent-skills/skills/baynex-update-specifications .agents/skills/
 cp -R baynex-agent-skills/skills/baynex-manage-ui-definitions .agents/skills/
+cp -R baynex-agent-skills/skills/baynex-app-distribution-setup .agents/skills/
 ```
 
 `.agents/skills` を探索しないクライアントでは、そのクライアント固有のSkillディレクトリへ同じフォルダを配置してください。Claude Codeでは `.claude/skills` が一般的です。Skill機構を持たないエージェントでは、選択した `SKILL.md` をプロジェクト指示としてimportし、相対参照される `references/` も一緒に渡します。
@@ -64,7 +66,11 @@ stdio MCPに対応するクライアントでは、次の設定をクライア�
 node scripts/baynex-mcp-stdio.mjs --verify
 ```
 
-リポジトリルートはCodex pluginとしても利用できます。`.codex-plugin/plugin.json` と `.mcp.json` が3つのSkillと同じstdioアダプターを登録します。
+リポジトリルートはCodex pluginとしても利用できます。`.codex-plugin/plugin.json` と `.mcp.json` がSkillと同じstdioアダプターを登録します。
+
+## App Distribution kit
+
+別の Flutter アプリを Baynex「アプリ配布」に接続する手順と再利用可能な GitHub Actions workflow は [app-distribution/README.md](app-distribution/README.md) にあります。
 
 ## Mutation policy
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Baynex: Set up app distribution"
+  short_description: "Set up a project for Baynex アプリ配布"
+  default_prompt: "Use $baynex-app-distribution-setup to configure this app repository for Baynex アプリ配布 and verify the check workflow."

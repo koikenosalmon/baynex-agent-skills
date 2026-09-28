@@ -1,0 +1,70 @@
+name: App Distribution Check
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        type: string
+        default: distribution/apps.json
+      kit-ref:
+        type: string
+        default: v1
+      ensure_bundle_ids:
+        type: boolean
+        default: true
+      register_devices:
+        type: boolean
+        default: false
+
+env:
+  DISTRIBUTION_CONFIG: ${{ inputs.config-path }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: koikenosalmon/baynex-agent-skills
+          ref: ${{ inputs.kit-ref }}
+          path: .baynex-app-distribution-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - id: config
+        name: Read configuration
+        env:
+          WIF_PROVIDER_OVERRIDE: ${{ vars.GCP_WIF_PROVIDER }}
+          WIF_SERVICE_ACCOUNT_OVERRIDE: ${{ vars.FIREBASE_UPLOADER_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo "wif_provider=${WIF_PROVIDER_OVERRIDE:-$(jq -r '.gcp.workloadIdentityProvider // empty' "$DISTRIBUTION_CONFIG")}" >> "$GITHUB_OUTPUT"
+          echo "wif_service_account=${WIF_SERVICE_ACCOUNT_OVERRIDE:-$(jq -r '.gcp.uploaderServiceAccount // empty' "$DISTRIBUTION_CONFIG")}" >> "$GITHUB_OUTPUT"
+      - id: auth
+        name: Check Google WIF
+        if: steps.config.outputs.wif_provider != '' && steps.config.outputs.wif_service_account != ''
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ steps.config.outputs.wif_provider }}
+          service_account: ${{ steps.config.outputs.wif_service_account }}
+      - name: Check Apple accounts in Secret Manager and Firebase
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          WIF_PROVIDER: ${{ steps.config.outputs.wif_provider }}
+          WIF_SERVICE_ACCOUNT: ${{ steps.config.outputs.wif_service_account }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          AUTH_OUTCOME: ${{ steps.auth.outcome }}
+          ENSURE_BUNDLE_IDS: ${{ inputs.ensure_bundle_ids }}
+          REGISTER_DEVICES: ${{ inputs.register_devices }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/distribution-check.mjs
