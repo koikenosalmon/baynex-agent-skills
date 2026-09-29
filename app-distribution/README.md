@@ -22,7 +22,21 @@ node ../baynex-agent-skills/app-distribution/bootstrap.mjs --project example-dev
 
 `add-apple-account.mjs` は既存のアカウントなら省略できます。出力された Secret Manager の 3 リンクで、所有者が `.p8` をアップロードし、Key ID と Issuer ID を貼り付けます。`bootstrap.mjs` は secret の読み取り権限を CI サービスアカウントに付与します。作成内容を確認するには `--dry-run` を使えます。既存設定は再利用し、再実行できます。既に `apps.json` がある場合は、登録済みのアプリと表示名、flavor / target をそのまま残します。Firebase で見つかった新しいアプリは候補として表示するだけで、追加するときは `--include-new` を付けて再実行します。`--short` で pool とサービスアカウントの接頭辞、`--out` で JSON の出力先を変えられます。
 
-生成された `distribution/apps.json` を開き、iOS / Android の組を確認してください。対応が一意でないプラットフォームは除外されます。各アプリの `flavor: "TODO"` と `target: "TODO"` を実際の Flutter flavor と Dart エントリポイントに直してください。`target` は `lib/main_example.dart` のように指定します。
+生成された `distribution/apps.json` を開き、iOS / Android の組を確認してください。
+
+### iOS / Android の対応付け
+
+対応は推測で決めず、黙って除外もしません。`apps.json` に登録済みの組と、表示名・識別子の末尾で一意に決まる組はそのまま使います。一意に決まらない iOS アプリがあるときは次のように動きます。
+
+- 端末（TTY）で実行: 候補を番号付きで表示して選びます（`s` でそのアプリを追加しない）。
+- 非対話（CI やパイプ）: 候補を一覧してから終了コード 2 で止まります。表示された ID を `--pair` で指定して再実行します（複数回指定できます）。
+
+```sh
+node ../baynex-agent-skills/app-distribution/bootstrap.mjs --project example-dev --repo example/app --apple-account example \
+  --pair ios=1:111:ios:aaa,android=1:111:android:bbb --pair ios=1:111:ios:ccc,android=1:111:android:ddd
+```
+
+`--pair` で指定したアプリは `--include-new` なしでも追加されます。各アプリの `flavor: "TODO"` と `target: "TODO"` を実際の Flutter flavor と Dart エントリポイントに直してください。`target` は `lib/main_example.dart` のように指定します。
 
 次にテンプレートをアプリリポジトリへコピーします。
 
@@ -32,7 +46,7 @@ cp ../baynex-agent-skills/app-distribution/templates/caller-app-distribution.yml
 cp ../baynex-agent-skills/app-distribution/templates/caller-app-distribution-check.yml .github/workflows/app-distribution-check.yml
 ```
 
-両 caller は `permissions: contents: read, id-token: write` と `secrets: inherit` を含みます。`config-path` を変更した場合は `distribution/apps.json` の場所に合わせます。テンプレートの `@v1` と `kit-ref: v1` はキットのリリースブランチ `v1` を指します。キットの修正は `main` にマージしたあと `v1` を同じコミットまで進めると、全プロジェクトの次の実行に反映されます（`git push origin origin/main:v1`）。互換性のない変更は `v2` ブランチで出します。
+両 caller は `permissions: contents: read, id-token: write` と `secrets: inherit` を含みます。`--repo` の所有者がキットの所有者（`koikenosalmon`）と異なる場合、`bootstrap.mjs` は上の代わりに別オーナー用テンプレート（後述）を `.github/workflows/` へ自動で書き込みます（既存ファイルは `secrets: inherit` を含むときだけ置き換え、手で直した明示マッピング版は残します。`--dry-run` では書きません）。`config-path` を変更した場合は `distribution/apps.json` の場所に合わせます。テンプレートの `@v1` と `kit-ref: v1` はキットのリリースブランチ `v1` を指します。キットの修正は `main` にマージしたあと `v1` を同じコミットまで進めると、全プロジェクトの次の実行に反映されます（`git push origin origin/main:v1`）。互換性のない変更は `v2` ブランチで出します。
 
 `apps.json` と caller workflow 2 件をコミットしてから、確認 workflow を実行します。
 
@@ -46,7 +60,26 @@ CI に署名済み Android APK が必要な場合は、`ANDROID_KEYSTORE_BASE64`
 
 ## 別の組織から呼ぶとき
 
-`secrets: inherit` は同じ組織（または Enterprise）内の呼び出しでしか secrets を渡しません。キットの所有者（`koikenosalmon`）と異なるアカウントや組織のリポジトリから呼ぶと、reusable workflow 側の `secrets.*` がすべて空になります。その場合は `caller-app-distribution-cross-owner.yml` と `caller-app-distribution-check-cross-owner.yml` をコピーしてください。各 secret を `NAME: ${{ secrets.NAME }}` で明示的に渡します。キットは使う secret を `on.workflow_call.secrets` に宣言しているため、同じ組織の caller は従来どおり `secrets: inherit` を使えます。キットに secret が増えたときは、別の組織の caller のマッピングにも追加します。
+`secrets: inherit` は同じ組織（または Enterprise）内の呼び出しでしか secrets を渡しません。キットの所有者（`koikenosalmon`）と異なるアカウントや組織のリポジトリから呼ぶと、reusable workflow 側の `secrets.*` がすべて空になります。その場合は `caller-app-distribution-cross-owner.yml` と `caller-app-distribution-check-cross-owner.yml` をコピーしてください。各 secret を `NAME: ${{ secrets.NAME }}` で明示的に渡します。キットは使う secret を `on.workflow_call.secrets` に宣言しているため、同じ組織の caller は従来どおり `secrets: inherit` を使えます。キットに secret が増えたときは、別の組織の caller のマッピングにも追加します。今回 check 用にも `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` を宣言したため、既存の別オーナー caller は check 側のマッピングに同 4 件を足すと、Android 署名 secret の到達も確認できます（足さなくても動き、その secret は『受信していません』と表示されるだけです）。
+
+別オーナーの caller が `secrets: inherit` のままだと、check workflow が `Caller` 行で ❌ を出し、cross-owner テンプレートを使うよう案内します。
+
+## check workflow が確認すること
+
+Summary の表に次の行が追加されます（secret の値は表示しません）。
+
+| 区分 | 内容 |
+| --- | --- |
+| GitHub Secrets | 宣言した 9 件の secret が実際に届いたか（有無のみ）。任意の secret は未受信でも ⚠️ です。 |
+| Caller | 別オーナーの caller が `secrets: inherit` を使っていれば ❌。 |
+| Secret マスク | 受信した secret の値（3 文字以上）が `apps.json` の文字列に含まれると ❌。secret 名と `apps.json` のキーだけを表示します（下の『マスクの衝突』参照）。 |
+| Apple クラウド署名の権限 | ASC キーで `GET /v1/users?limit=1`。200 なら ✅、403 なら ❌『Admin のチームキーが必要』、その他は ⚠️ 判定不能。 |
+| 非公開 Git 依存 `<repo> 到達性` | 設定した認証情報で `git ls-remote` を実行し、失敗したら ❌。 |
+| ビルド番号 | この check の `run_number + buildNumberOffset` が Firebase の最大ビルド番号より小さいと ⚠️。配布 workflow の `run_number` とは別なので目安です。 |
+
+### マスクの衝突
+
+GitHub Actions は secret の値を含む文字列をログとジョブ出力から取り除きます（部分一致）。たとえば `ANDROID_KEY_ALIAS` が `app` だと、`example-app` を含む出力が空になります。配布 workflow は detect ジョブの出力に設定値を載せず、matrix には `apps.json` のインデックスだけを渡して、各ジョブが `apps.json` を読み直します（ジョブ名は `Android / app 0` のようにインデックス表記です）。残る衝突は check の `Secret マスク` 行で見つかるので、secret の値を変えてください。
 
 ## Apple アカウントを追加・変更
 
@@ -65,6 +98,8 @@ node ../baynex-agent-skills/app-distribution/grant-apple-account.mjs --slug anot
 { "privateGitDependencies": ["OTERA-Co-Ltd/otera-packages"] }
 ```
 
+`bootstrap.mjs` は `<appDir>/pubspec.yaml` の GitHub `git:` 依存を調べ、`gh api repos/<owner>/<repo>` で非公開と分かった別リポジトリを `privateGitDependencies` に追加します。依存が 1 件で、アプリリポジトリに `GIT_DEPENDENCY_SSH_KEY` / `GIT_DEPENDENCY_TOKEN` がまだないときは、一時ディレクトリで `ssh-keygen` した鍵を読み取り専用の Deploy key として依存リポジトリに登録し（`gh repo deploy-key add`）、秘密鍵を `gh secret set GIT_DEPENDENCY_SSH_KEY` でアプリリポジトリに設定し、一時ファイルを削除します（鍵は表示しません）。依存リポジトリの管理者権限と `gh` のログインが必要です。組織が Deploy key を無効にしている場合（422 `Deploy keys are disabled`）と、依存が複数ある場合は Deploy key を作らず、下記のトークンを案内します。`--dry-run` では作成せず予定だけ表示します。
+
 認証情報は Actions Secrets に登録します（caller の `secrets: inherit` で渡ります）。両方ある場合は SSH 鍵を使います。
 
 | Secret | 内容 |
@@ -75,6 +110,16 @@ node ../baynex-agent-skills/app-distribution/grant-apple-account.mjs --slug anot
 Android / iOS の `flutter pub get` の前に設定し、同じジョブの `flutter build` でも有効です。書き換えは `privateGitDependencies` に列挙したリポジトリの `https://github.com/<owner>/<repo>` だけが対象で、`pubspec.yaml` と同じ表記で書いてください。git の設定は `$RUNNER_TEMP` の 0600 ファイルに置き、`GIT_CONFIG_COUNT` の環境変数で読み込むだけで、グローバルの git 設定は変更しません。ssh-agent、鍵、設定ファイルはジョブ終了時に必ず削除します。`privateGitDependencies` が空なら何もしません。値がどちらもない場合は Summary に設定のお願いを表示し、`flutter pub get` は従来どおり失敗します。`app-distribution-check.yml` の Summary で設定の有無（値は表示しません）を確認できます。
 
 最小権限のために、Deploy key は依存リポジトリごとに作り、書き込み権限なし（read-only）にします。トークンを使う場合は fine-grained PAT で対象を依存リポジトリだけに絞り、Repository permissions は Contents: Read-only のみにして、有効期限を設定してください。Deploy key は 1 リポジトリに 1 つしか登録できません。複数の依存リポジトリがあるときはトークンが扱いやすいです。
+
+## ビルド番号のオフセット
+
+ビルド番号は既定で `github.run_number` です。他の CI から移行した、リポジトリを作り直したなど、Firebase に既に大きなビルド番号があるときは、`distribution/apps.json` の最上位に 0 以上の整数を指定します（任意）。
+
+```json
+{ "buildNumberOffset": 1000 }
+```
+
+Android / iOS の両ジョブが `--build-number` に `run_number + buildNumberOffset` を渡します（`scripts/build-number.mjs`）。未指定は 0 で従来どおりです。`bootstrap.mjs` を再実行しても値は保持されます。
 
 ## Flutter のバージョン固定
 
@@ -95,6 +140,9 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 | Apple secret が空または読めない | 所有者に console で新しいバージョンを登録してもらい、`secretAccessor` を確認します。 |
 | `Cloud billing quota exceeded` | GCP プロジェクト作成時の課金枠です。所有者に枠の解消を依頼し、勝手に別プロジェクトへ変更しません。 |
 | `flavor` / `target` が `TODO` | アプリチームに実際の Flutter 設定を確認します。 |
+| bootstrap が終了コード 2 で止まる | iOS / Android の対応が一意でありません。表示された候補から `--pair` で指定します。 |
+| ジョブ出力が空になる、値が `***` になる | secret の値が `apps.json` の文字列に含まれています。check の `Secret マスク` 行で secret 名を確認し、値を変えます。 |
+| 別オーナーの repo で secrets が空 | caller が `secrets: inherit` です。cross-owner テンプレートに置き換えます。 |
 | `flutter pub get` が `git clone ... exit 128` で失敗 | 非公開の Git 依存です。上の「非公開の Git 依存」を設定します。 |
 | Baynex にリリースが出ない | Firebase リリースとリリースノート末尾の `[baynex]`、40 桁の commit を確認します。 |
 

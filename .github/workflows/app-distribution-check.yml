@@ -16,6 +16,18 @@ on:
         type: boolean
         default: false
     secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+        description: Base64-encoded Android upload keystore
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+        description: Android keystore password
+      ANDROID_KEY_ALIAS:
+        required: false
+        description: Android signing key alias
+      ANDROID_KEY_PASSWORD:
+        required: false
+        description: Android signing key password
       APP_STORE_CONNECT_KEY_P8:
         required: false
         description: App Store Connect API key (.p8 contents)
@@ -81,8 +93,15 @@ jobs:
           WIF_SERVICE_ACCOUNT: ${{ steps.config.outputs.wif_service_account }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           AUTH_OUTCOME: ${{ steps.auth.outcome }}
-          GIT_DEPENDENCY_SSH_KEY_SET: ${{ secrets.GIT_DEPENDENCY_SSH_KEY != '' }}
-          GIT_DEPENDENCY_TOKEN_SET: ${{ secrets.GIT_DEPENDENCY_TOKEN != '' }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GIT_DEPENDENCY_SSH_KEY: ${{ secrets.GIT_DEPENDENCY_SSH_KEY }}
+          GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}
+          CALLER_OWNER: ${{ github.repository_owner }}
+          KIT_OWNER: koikenosalmon
+          RUN_NUMBER: ${{ github.run_number }}
           ENSURE_BUNDLE_IDS: ${{ inputs.ensure_bundle_ids }}
           REGISTER_DEVICES: ${{ inputs.register_devices }}
         run: node .baynex-app-distribution-kit/app-distribution/scripts/distribution-check.mjs
