@@ -76,6 +76,16 @@ Android / iOS の `flutter pub get` の前に設定し、同じジョブの `flu
 
 最小権限のために、Deploy key は依存リポジトリごとに作り、書き込み権限なし（read-only）にします。トークンを使う場合は fine-grained PAT で対象を依存リポジトリだけに絞り、Repository permissions は Contents: Read-only のみにして、有効期限を設定してください。Deploy key は 1 リポジトリに 1 つしか登録できません。複数の依存リポジトリがあるときはトークンが扱いやすいです。
 
+## Flutter のバージョン固定
+
+CI は既定で Flutter の `stable` 最新版を入れます。アプリが最新版に対応していない場合（例: Gradle の最低バージョンが上がったとき）は、`distribution/apps.json` の最上位に、チームが使っている Flutter のバージョンを `3.41.9` のような形式で指定します（任意）。
+
+```json
+{ "flutterVersion": "3.41.9" }
+```
+
+指定すると、Android / iOS の両ジョブがそのバージョンを `subosito/flutter-action` に渡します（`channel: stable` は維持）。未指定なら従来どおり `stable` の最新版です。`3.41` や `3.x` のような曖昧な指定は受け付けません。チームが Flutter をアップグレードしたときは、この値も更新してください。`bootstrap.mjs` を再実行しても値は保持されます。
+
 ## 問題があるとき
 
 | 症状 | 対処 |

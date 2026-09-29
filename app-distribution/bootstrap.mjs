@@ -102,7 +102,8 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
   if (new Set(apps.map((app) => app.id)).size !== apps.length) throw new Error('アプリ ID が重複しています。識別子の組を確認してください');
   const config = { appDir, firebaseProject: project, gcp: { workloadIdentityProvider: provider, uploaderServiceAccount: serviceAccount }, apps,
     appleAccounts: { ...(previous.appleAccounts || {}), [appleAccount]: accountNames(appleAccount) },
-    ...(previous.privateGitDependencies === undefined ? {} : { privateGitDependencies: previous.privateGitDependencies }) };
+    ...(previous.privateGitDependencies === undefined ? {} : { privateGitDependencies: previous.privateGitDependencies }),
+    ...(previous.flutterVersion === undefined ? {} : { flutterVersion: previous.flutterVersion }) };
   validateApps(config);
   if (dryRun) report('⚠️', `${out}: ${apps.length} アプリを書き込み予定`);
   else { await mkdir(dirname(out), { recursive: true }); await writeFile(out, `${JSON.stringify(config, null, 2)}\n`, { flag: 'w' }); report('✅', `${out}: ${apps.length} アプリを書き込みました`); }

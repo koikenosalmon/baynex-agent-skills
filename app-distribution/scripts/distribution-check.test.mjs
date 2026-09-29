@@ -76,3 +76,10 @@ test('check reports private Git dependency credentials by presence only', async 
   assert.match(key.summary, /owner\/private-repo \| ✅ \| SSH 鍵（GIT_DEPENDENCY_SSH_KEY）が設定済み/);
   await assert.rejects(() => run({ privateGitDependencies: ['not a repo'] }, {}), /privateGitDependencies/);
 });
+
+test('check reports the pinned Flutter version and rejects a malformed one', async () => {
+  const run = (config) => runCheck({ config: { appleAccounts: accounts, apps, ...config }, env: { AUTH_OUTCOME: 'failure' }, print: () => {}, fetch: async () => response({}, 404) });
+  assert.ok(!(await run({})).summary.includes('Flutter バージョン'));
+  assert.match((await run({ flutterVersion: '3.41.9' })).summary, /Flutter バージョン \| ✅ \| CI は 3\.41\.9 に固定/);
+  await assert.rejects(() => run({ flutterVersion: 'stable' }), /flutterVersion/);
+});

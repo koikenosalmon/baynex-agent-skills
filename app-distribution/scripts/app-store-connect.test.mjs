@@ -76,6 +76,11 @@ test('every app references a valid Apple account', () => {
   assert.throws(() => validateApps({ apps: [app], appleAccounts: { example: { ...account, secretProject: 'Bad_Project' } } }), /アカウント設定/);
 });
 
+test('apps.json accepts optional flutterVersion and rejects malformed ones', () => {
+  assert.equal(validateApps({ ...config([app]), flutterVersion: '3.41.9' }).length, 1);
+  assert.throws(() => validateApps({ ...config([app]), flutterVersion: 'stable' }), /flutterVersion/);
+});
+
 test('apps.json accepts optional privateGitDependencies and rejects malformed ones', () => {
   assert.equal(validateApps({ ...config([app]), privateGitDependencies: ['OTERA-Co-Ltd/otera-packages'] }).length, 1);
   assert.throws(() => validateApps({ ...config([app]), privateGitDependencies: ['https://github.com/OTERA-Co-Ltd/otera-packages'] }), /privateGitDependencies/);
