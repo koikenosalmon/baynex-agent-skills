@@ -106,11 +106,11 @@ test('bootstrap writes caller config and checks both Firebase distributions', as
   assert.ok(!(await readFile(out, 'utf8')).includes('private-token'));
 });
 
-test('bootstrap rerun keeps privateGitDependencies from the existing config', async (t) => {
+test('bootstrap rerun keeps privateGitDependencies and flutterVersion from the existing config', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'app-kit-bootstrap-git-deps-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const out = join(dir, 'apps.json');
-  await writeFile(out, JSON.stringify({ privateGitDependencies: ['owner/private-repo'] }));
+  await writeFile(out, JSON.stringify({ privateGitDependencies: ['owner/private-repo'], flutterVersion: '3.41.9' }));
   const original = console.log;
   console.log = () => {};
   let config;
@@ -132,4 +132,6 @@ test('bootstrap rerun keeps privateGitDependencies from the existing config', as
   }); } finally { console.log = original; }
   assert.deepEqual(config.privateGitDependencies, ['owner/private-repo']);
   assert.deepEqual(JSON.parse(await readFile(out, 'utf8')).privateGitDependencies, ['owner/private-repo']);
+  assert.equal(config.flutterVersion, '3.41.9');
+  assert.equal(JSON.parse(await readFile(out, 'utf8')).flutterVersion, '3.41.9');
 });

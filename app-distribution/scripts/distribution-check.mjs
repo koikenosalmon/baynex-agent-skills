@@ -5,7 +5,7 @@ import { createClient, validateApps, bundleStatus, registerDevices } from './app
 import { accessSecret } from './secret-manager.mjs';
 import { fetchTesterUdids } from './firebase-udids.mjs';
 import { ensureStarted } from './firebase-activate.mjs';
-import { readConfig, splitConfigArgs, validatePrivateGitDependencies } from './config.mjs';
+import { readConfig, splitConfigArgs, validateFlutterVersion, validatePrivateGitDependencies } from './config.mjs';
 
 export const distributionNotStarted = '自動開始に失敗しました。Firebase コンソールの App Distribution で『使ってみる』を押してください';
 const fields = { keyP8: 'keyP8Secret', keyId: 'keyIdSecret', issuerId: 'issuerIdSecret' };
@@ -22,6 +22,8 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
   const googleReady = !!env.WIF_PROVIDER && !!env.WIF_SERVICE_ACCOUNT;
   let token = env.GOOGLE_OAUTH_ACCESS_TOKEN;
   for (const [name, value] of [['WIF provider', env.WIF_PROVIDER], ['Uploader service account', env.WIF_SERVICE_ACCOUNT]]) row('設定', name, value ? '✅' : '⚠️', value ? '設定済み' : '未設定');
+  const flutterVersion = validateFlutterVersion(config);
+  if (flutterVersion) row('設定', 'Flutter バージョン', '✅', `CI は ${flutterVersion} に固定`);
   const gitDependencies = validatePrivateGitDependencies(config);
   if (gitDependencies.length) {
     const method = env.GIT_DEPENDENCY_SSH_KEY_SET === 'true' ? 'SSH 鍵（GIT_DEPENDENCY_SSH_KEY）' : env.GIT_DEPENDENCY_TOKEN_SET === 'true' ? 'トークン（GIT_DEPENDENCY_TOKEN）' : null;

@@ -24,3 +24,12 @@ export function validatePrivateGitDependencies(config) {
   if (new Set(repos.map((repo) => repo.toLowerCase())).size !== repos.length) throw new Error('apps.json の privateGitDependencies に重複があります');
   return repos;
 }
+
+const flutterVersionPattern = /^\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]+)?$/;
+
+export function validateFlutterVersion(config) {
+  const version = config?.flutterVersion;
+  if (version === undefined) return '';
+  if (typeof version !== 'string' || version.length > 64 || !flutterVersionPattern.test(version)) throw new Error('apps.json の flutterVersion が不正です（"3.41.9" のようなバージョン文字列）');
+  return version;
+}
