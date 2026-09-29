@@ -61,9 +61,11 @@ jobs:
           app_dir=$(jq -r '.appDir // "native"' "$DISTRIBUTION_CONFIG")
           product_id=$PRODUCT_ID_OVERRIDE
           if [[ -z "$product_id" && -f baynex/config.json ]]; then product_id=$(jq -r '.productId // empty' baynex/config.json); fi
-          echo "app_dir=$app_dir" >> "$GITHUB_OUTPUT"
-          echo "product_id=$product_id" >> "$GITHUB_OUTPUT"
-          jq -c '.apps' "$DISTRIBUTION_CONFIG" | sed 's/^/matrix=/' >> "$GITHUB_OUTPUT"
+          {
+            echo "app_dir=$app_dir"
+            echo "product_id=$product_id"
+            jq -c '.apps' "$DISTRIBUTION_CONFIG" | sed 's/^/matrix=/'
+          } >> "$GITHUB_OUTPUT"
           wif_provider=${WIF_PROVIDER:-$(jq -r '.gcp.workloadIdentityProvider // empty' "$DISTRIBUTION_CONFIG")}
           wif_service_account=${WIF_SERVICE_ACCOUNT:-$(jq -r '.gcp.uploaderServiceAccount // empty' "$DISTRIBUTION_CONFIG")}
           echo "wif_provider=$wif_provider" >> "$GITHUB_OUTPUT"
@@ -116,6 +118,11 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Configure private Git dependencies
+        env:
+          GIT_DEPENDENCY_SSH_KEY: ${{ secrets.GIT_DEPENDENCY_SSH_KEY }}
+          GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs setup
       - name: Install dependencies
         working-directory: ${{ needs.detect.outputs.app_dir }}
         run: flutter pub get
@@ -178,6 +185,9 @@ jobs:
           FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.android }}
           ARTIFACT: ${{ steps.build.outputs.artifact }}
         run: npx -y firebase-tools@14 appdistribution:distribute "$ARTIFACT" --app "$FIREBASE_APP_ID" --release-notes-file release-notes.txt
+      - name: Remove private Git dependency credentials
+        if: always()
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs cleanup
       - name: Remove signing files
         if: always()
         working-directory: ${{ needs.detect.outputs.app_dir }}
@@ -241,6 +251,12 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Configure private Git dependencies
+        if: steps.credentials.outcome == 'success'
+        env:
+          GIT_DEPENDENCY_SSH_KEY: ${{ secrets.GIT_DEPENDENCY_SSH_KEY }}
+          GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs setup
       - name: Install dependencies
         if: steps.credentials.outcome == 'success'
         working-directory: ${{ needs.detect.outputs.app_dir }}
@@ -325,6 +341,9 @@ jobs:
           FIREBASE_APP_ID: ${{ matrix.app.firebaseAppIds.ios }}
           ARTIFACT: ${{ steps.build.outputs.artifact }}
         run: npx -y firebase-tools@14 appdistribution:distribute "$ARTIFACT" --app "$FIREBASE_APP_ID" --release-notes-file release-notes.txt
+      - name: Remove private Git dependency credentials
+        if: always()
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs cleanup
       - name: Remove temporary signing material
         if: always()
         run: rm -rf "$RUNNER_TEMP/apple-account" && rm -f "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"

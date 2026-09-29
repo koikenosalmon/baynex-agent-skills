@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bootstrap, pairApps } from './bootstrap.mjs';
@@ -104,4 +104,32 @@ test('bootstrap writes caller config and checks both Firebase distributions', as
   assert.equal(bindings.length, 2);
   for (const args of bindings) assert.ok(args.includes('--condition=None'), 'IAM bindings must work on policies that already contain conditions');
   assert.ok(!(await readFile(out, 'utf8')).includes('private-token'));
+});
+
+test('bootstrap rerun keeps privateGitDependencies from the existing config', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'app-kit-bootstrap-git-deps-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const out = join(dir, 'apps.json');
+  await writeFile(out, JSON.stringify({ privateGitDependencies: ['owner/private-repo'] }));
+  const original = console.log;
+  console.log = () => {};
+  let config;
+  try { config = await bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out }, {
+    gcloud: (args) => {
+      if (args[0] === 'projects' && args[1] === 'describe') return '000000000000';
+      if (args[0] === 'services' && args[1] === 'list') return ['iam', 'iamcredentials', 'sts', 'firebaseappdistribution', 'firebase'].map((api) => `${api}.googleapis.com`).join('\n');
+      if (args[0] === 'auth') return 'private-token';
+      if (args.includes('add-iam-policy-binding')) return '';
+      throw new Error(`unexpected gcloud command: ${args.join(' ')}`);
+    },
+    ensureResource: () => {},
+    grantAppleAccount: () => {},
+    fetch: async (url) => {
+      if (String(url).includes('/iosApps')) return { ok: true, json: async () => ({ apps: [ios[0]] }) };
+      if (String(url).includes('/androidApps')) return { ok: true, json: async () => ({ apps: [android[0]] }) };
+      return { status: 200 };
+    },
+  }); } finally { console.log = original; }
+  assert.deepEqual(config.privateGitDependencies, ['owner/private-repo']);
+  assert.deepEqual(JSON.parse(await readFile(out, 'utf8')).privateGitDependencies, ['owner/private-repo']);
 });

@@ -62,3 +62,17 @@ test('check starts apps on releases 404 and reports probe failure with console f
   assert.ok(!result.summary.includes(values[accounts.example.keyIdSecret]));
   assert.equal(output.length, 1);
 });
+
+test('check reports private Git dependency credentials by presence only', async () => {
+  const run = (config, env) => runCheck({ config: { appleAccounts: accounts, apps, ...config }, env: { AUTH_OUTCOME: 'failure', ...env }, print: () => {}, fetch: async () => response({}, 404) });
+  const none = await run({}, {});
+  assert.ok(!none.summary.includes('非公開 Git 依存'));
+  const missing = await run({ privateGitDependencies: ['owner/private-repo'] }, {});
+  assert.match(missing.summary, /非公開 Git 依存 \| owner\/private-repo \| ⚠️ \| GIT_DEPENDENCY_SSH_KEY か GIT_DEPENDENCY_TOKEN を設定してください/);
+  const token = await run({ privateGitDependencies: ['owner/private-repo'] }, { GIT_DEPENDENCY_TOKEN_SET: 'true', GIT_DEPENDENCY_TOKEN: 'ghp_secret' });
+  assert.match(token.summary, /owner\/private-repo \| ✅ \| トークン（GIT_DEPENDENCY_TOKEN）が設定済み/);
+  assert.ok(!token.summary.includes('ghp_secret'));
+  const key = await run({ privateGitDependencies: ['owner/private-repo'] }, { GIT_DEPENDENCY_SSH_KEY_SET: 'true', GIT_DEPENDENCY_TOKEN_SET: 'true' });
+  assert.match(key.summary, /owner\/private-repo \| ✅ \| SSH 鍵（GIT_DEPENDENCY_SSH_KEY）が設定済み/);
+  await assert.rejects(() => run({ privateGitDependencies: ['not a repo'] }, {}), /privateGitDependencies/);
+});

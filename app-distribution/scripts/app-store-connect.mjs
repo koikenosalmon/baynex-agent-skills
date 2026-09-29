@@ -3,7 +3,7 @@ import { createPrivateKey, sign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { validateAppleAccounts } from './secret-manager.mjs';
-import { readConfig, splitConfigArgs } from './config.mjs';
+import { readConfig, splitConfigArgs, validatePrivateGitDependencies } from './config.mjs';
 
 const BASE = 'https://api.appstoreconnect.apple.com';
 const bundlePattern = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -16,6 +16,7 @@ export function validateUdid(udid) {
 export function validateApps(config) {
   if (!config || !Array.isArray(config.apps) || config.apps.length === 0 || config.apps.length > 20) throw new Error('apps.json の apps が不正です');
   const accounts = validateAppleAccounts(config);
+  validatePrivateGitDependencies(config);
   return config.apps.map((app) => {
     if (!app || typeof app.id !== 'string' || !/^[a-z][a-z0-9-]{0,30}$/.test(app.id) || typeof app.iosBundleId !== 'string' || !bundlePattern.test(app.iosBundleId) || typeof app.displayName !== 'string' || app.displayName.length < 1 || app.displayName.length > 80 || (app.appleTeamId !== undefined && !teamPattern.test(app.appleTeamId))) throw new Error('apps.json の iOS 設定が不正です');
     if (typeof app.appleAccount !== 'string' || !Object.hasOwn(accounts, app.appleAccount)) throw new Error(`apps.json の Apple アカウント参照が不正です: ${app.id}`);

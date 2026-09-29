@@ -54,7 +54,7 @@ assert(server?.command === 'node' && server.args?.[0] === './scripts/baynex-mcp-
 assert(server.env_vars?.length === 3, 'MCP config must declare only canonical credential names');
 
 export async function validateKitLayout(kitRoot = new URL('../app-distribution/', import.meta.url), workflowRoot = new URL('../.github/workflows/', import.meta.url)) {
-  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'baynex-release-notes.sh'];
+  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh'];
   for (const file of scripts) {
     const source = await readFile(new URL(`scripts/${file}`, kitRoot), 'utf8');
     assert(source.length > 0, `${file}: empty kit script`);
@@ -63,6 +63,9 @@ export async function validateKitLayout(kitRoot = new URL('../app-distribution/'
       assert(test.includes("node:test"), `${file}: missing node:test suite`);
     }
   }
+  const build = await readFile(new URL('app-distribution.yml', workflowRoot), 'utf8');
+  assert((build.match(/git-dependencies\.mjs setup/g) || []).length === 2 && (build.match(/git-dependencies\.mjs cleanup/g) || []).length === 2, 'app-distribution.yml: Android and iOS jobs must set up and clean up private Git dependencies');
+  assert(!/git config --global|persist-credentials: true/.test(build), 'app-distribution.yml: credentials must not be persisted in global git config');
   for (const file of ['bootstrap.mjs', 'add-apple-account.mjs', 'grant-apple-account.mjs', 'README.md']) assert((await readFile(new URL(file, kitRoot), 'utf8')).length > 0, `missing ${file}`);
   for (const file of ['app-distribution.yml', 'app-distribution-check.yml']) {
     const workflow = await readFile(new URL(file, workflowRoot), 'utf8');
