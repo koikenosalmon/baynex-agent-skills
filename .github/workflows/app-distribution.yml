@@ -9,6 +9,34 @@ on:
       kit-ref:
         type: string
         default: v1
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+        description: Base64-encoded Android upload keystore
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+        description: Android keystore password
+      ANDROID_KEY_ALIAS:
+        required: false
+        description: Android signing key alias
+      ANDROID_KEY_PASSWORD:
+        required: false
+        description: Android signing key password
+      APP_STORE_CONNECT_KEY_P8:
+        required: false
+        description: App Store Connect API key (.p8 contents)
+      APP_STORE_CONNECT_KEY_ID:
+        required: false
+        description: App Store Connect API key ID
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: false
+        description: App Store Connect issuer ID
+      GIT_DEPENDENCY_SSH_KEY:
+        required: false
+        description: Deploy key for private Git dependencies
+      GIT_DEPENDENCY_TOKEN:
+        required: false
+        description: Token for private Git dependencies
 
 env:
   DISTRIBUTION_CONFIG: ${{ inputs.config-path }}
