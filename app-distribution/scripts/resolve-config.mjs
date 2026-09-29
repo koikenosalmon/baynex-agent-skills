@@ -9,7 +9,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BaynexError, postBaynex } from './baynex-oidc.mjs';
+import { BaynexError, postBaynex, toStderr } from './baynex-oidc.mjs';
 import { configPath, splitConfigArgs } from './config.mjs';
 
 const text = (value) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
@@ -55,7 +55,7 @@ export function mergeConfig(repoConfig, remote) {
 }
 
 // Returns { config, status: 'ok'|'denied'|'unreachable', mode, warning }.
-export async function resolveConfig({ repoConfig, env = process.env, fetch: fetchImpl = fetch, print = console.log }) {
+export async function resolveConfig({ repoConfig, env = process.env, fetch: fetchImpl = fetch, print = toStderr }) {
   let remote = null;
   let status = 'ok';
   let warning = '';
@@ -70,7 +70,7 @@ export async function resolveConfig({ repoConfig, env = process.env, fetch: fetc
   return { config, status, mode: remote?.mode || '', warning };
 }
 
-export async function runCli(args, env = process.env, fetchImpl = fetch, print = console.log, warn = console.error) {
+export async function runCli(args, env = process.env, fetchImpl = fetch, print = toStderr, warn = toStderr) {
   ({ args, env } = splitConfigArgs(args, env));
   if (args.length) throw new Error('使い方: resolve-config.mjs [--config <apps.json>]');
   const source = configPath(env);

@@ -2,6 +2,7 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { toStderr } from './baynex-oidc.mjs';
 import { fetchAscToken } from './apple-credentials.mjs';
 import { validateAppleAccounts } from './secret-manager.mjs';
 import { readConfig, splitConfigArgs, validateBuildNumberOffset, validateFlutterVersion, validatePrivateGitDependencies } from './config.mjs';
@@ -133,8 +134,8 @@ export async function runCli(args, env = process.env, fetchImpl = fetch) {
   // Prefer the short-lived ASC token from Baynex; fall back to signing a JWT from the loaded key.
   let client;
   if (env.ACTIONS_ID_TOKEN_REQUEST_URL && env.BAYNEX_ASC_TOKEN !== 'off') {
-    try { client = createClient({ token: (await fetchAscToken({ env, fetch: fetchImpl })).token }, fetchImpl); console.error('ASC API の認証: Baynex asc-token'); }
-    catch (error) { console.error(`Baynex asc-token を使えません（${error.message}）。取得済みの鍵で JWT を作ります`); }
+    try { client = createClient({ token: (await fetchAscToken({ env, fetch: fetchImpl, print: toStderr })).token }, fetchImpl); toStderr('ASC API の認証: Baynex asc-token'); }
+    catch (error) { toStderr(`Baynex asc-token を使えません（${error.message}）。取得済みの鍵で JWT を作ります`); }
   }
   if (!client) client = await keyClient(env, fetchImpl);
   if (command === 'register-devices') return registerDevices(client, JSON.parse(await readFile(argument, 'utf8')));

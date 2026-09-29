@@ -106,17 +106,17 @@ async function runWithBaynex(t, baynex, extraEnv = {}) {
     return inner.fetch(url, options);
   };
   const env = { ...oidcEnv, DISTRIBUTION_CONFIG: join(dir, 'apps.json'), APP_STORE_CONNECT_KEY_P8_FILE: join(dir, 'key.p8'), APP_STORE_CONNECT_KEY_ID_FILE: join(dir, 'key-id'), APP_STORE_CONNECT_ISSUER_ID_FILE: join(dir, 'issuer-id'), ...extraEnv };
-  const original = console.error;
+  const original = process.stderr.write;
   const errors = [];
-  console.error = (line) => errors.push(String(line));
-  try { return { result: await runCli(['check'], env, fetch), authorizations, errors }; } finally { console.error = original; }
+  process.stderr.write = (chunk) => { errors.push(String(chunk)); return true; };
+  try { return { result: await runCli(['check'], env, fetch), authorizations, errors }; } finally { process.stderr.write = original; }
 }
 
 test('ASC calls prefer the Baynex asc-token', async (t) => {
   const { result, authorizations, errors } = await runWithBaynex(t, () => jsonResponse({ token: ascToken, teamId: 'ABCDE12345', expiresAt: 'x' }));
   assert.equal(result.teamId, 'ABCDE12345');
   assert.ok(authorizations.length && authorizations.every((value) => value === `Bearer ${ascToken}`));
-  assert.ok(!errors.join('\n').includes(ascToken));
+  assert.ok(!errors.join('').split('\n').filter((line) => !line.startsWith('::add-mask::')).join('\n').includes(ascToken));
 });
 
 test('ASC calls fall back to a JWT from the loaded key when Baynex denies', async (t) => {
