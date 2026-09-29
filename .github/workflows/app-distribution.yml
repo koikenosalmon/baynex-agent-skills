@@ -71,6 +71,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Resolve distribution configuration
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/resolve-config.mjs
       - id: config
         name: Check app and prerequisites
         env:
@@ -90,6 +92,10 @@ jobs:
           if [[ -f "$app_dir/pubspec.yaml" ]]; then
             if jq -e 'any(.apps[]; .flavor == "TODO" or .target == "TODO")' "$DISTRIBUTION_CONFIG" >/dev/null; then
               echo 'apps.json の flavor / target の TODO を確定してください' >&2
+              exit 1
+            fi
+            if jq -e 'any(.apps[]; (.flavor // "") == "" or (.target // "") == "")' "$DISTRIBUTION_CONFIG" >/dev/null; then
+              echo 'flavor / target が未設定のアプリがあります（apps.json か Baynex のアプリ設定で確定してください）' >&2
               exit 1
             fi
             echo 'app_present=true' >> "$GITHUB_OUTPUT"
@@ -131,6 +137,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Resolve distribution configuration
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/resolve-config.mjs
       - name: Load app configuration
         env:
           APP_INDEX: ${{ matrix.index }}
@@ -181,7 +189,7 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$GITHUB_WORKSPACE/$DISTRIBUTION_CONFIG")
+          build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--flavor "$FLAVOR" -t "$TARGET" --release --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
           flutter build apk "${args[@]}"
@@ -254,6 +262,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Resolve distribution configuration
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/resolve-config.mjs
       - name: Load app configuration
         env:
           APP_INDEX: ${{ matrix.index }}
@@ -271,14 +281,14 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
       - id: credentials
-        name: Load Apple account key
+        name: Load Apple account key (Baynex OIDC, then Secret Manager, then GitHub Secrets)
         env:
           APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
           APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-        run: node .baynex-app-distribution-kit/app-distribution/scripts/secret-manager.mjs load-account "$APPLE_ACCOUNT" "$RUNNER_TEMP/apple-account"
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/apple-credentials.mjs load "$APPLE_ACCOUNT" "$RUNNER_TEMP/apple-account"
       - uses: subosito/flutter-action@v2
         if: steps.credentials.outcome == 'success'
         with:
@@ -331,7 +341,7 @@ jobs:
           TEAM_ID: ${{ steps.prepare.outputs.team_id }}
         run: |
           set -euo pipefail
-          build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$GITHUB_WORKSPACE/$DISTRIBUTION_CONFIG")
+          build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--release --no-codesign --flavor "$FLAVOR" -t "$TARGET" --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
           flutter build ios "${args[@]}"
@@ -396,7 +406,10 @@ jobs:
           if [[ "$SIGNING_READY" != true ]]; then
             echo '- Apple アカウントのキーを取得できませんでした。' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- ビルド: $BUILD_RESULT" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Firebase 配布: $UPLOAD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "- Apple 鍵の取得経路: ${APPLE_KEY_SOURCE:-不明}"
+              echo "- ビルド: $BUILD_RESULT"
+              echo "- Firebase 配布: $UPLOAD_RESULT"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -n "$PRODUCT_ID" ]]; then echo "- [Baynex でこのコミットを開く](https://preview.baynex.jp/products/$PRODUCT_ID?view=apps&commit=$COMMIT)" >> "$GITHUB_STEP_SUMMARY"; fi

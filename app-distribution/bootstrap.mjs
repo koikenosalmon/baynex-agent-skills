@@ -135,6 +135,19 @@ async function listFirebaseApps(project, platform, token, fetchImpl = fetch) {
   return apps;
 }
 
+// Prints the numbers Baynex needs to register this repository for CI access (GitHub OIDC), and the settings URL.
+export async function reportBaynexRegistration({ repo, run = defaultRun, productConfigPath = 'baynex/config.json' }) {
+  const result = run('gh', ['api', `repos/${repo}`, '--jq', '[.id,.owner.id]|@tsv']);
+  const [repositoryId, ownerId] = result.status === 0 ? result.stdout.trim().split(/\s+/) : [];
+  let productId = '';
+  try { const value = JSON.parse(await readFile(productConfigPath, 'utf8')).productId; if (typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value)) productId = value; } catch { /* no product yet */ }
+  if (/^\d+$/.test(repositoryId || '') && /^\d+$/.test(ownerId || '')) report('✅', `Baynex の CI アクセス登録に必要な値: repositoryId=${repositoryId} ownerId=${ownerId}（${repo}）`);
+  else report('⚠️', `${repo}: repositoryId / ownerId を取得できません。gh api repos/${repo} --jq '.id,.owner.id' で確認してください`);
+  if (productId) report('✅', `Baynex の設定画面（CI アクセスを登録）: https://preview.baynex.jp/products/${productId}?view=apps`);
+  else report('⚠️', 'baynex/config.json に productId がありません。Baynex の製品ページの「アプリ」設定から CI アクセスを登録してください');
+  return { repositoryId, ownerId, productId };
+}
+
 export async function bootstrap({ project, repo, appleAccount, short, appDir, out = 'distribution/apps.json', dryRun = false, includeNew = false, pairs = [] }, deps = {}) {
   if (!projectPattern.test(project || '') || !repoPattern.test(repo || '') || !slugPattern.test(appleAccount || '')) throw new Error('project、repo、apple-account を確認してください');
   short ||= project.replace(/-(dev|prod|staging|qa)$/, '');
@@ -212,6 +225,7 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
     else if (dryRun) report('⚠️', `${destination}: 別オーナー用 caller（${template}）を書き込み予定`);
     else { await mkdir(dirname(destination), { recursive: true }); await writeFile(destination, content); report('✅', `${destination}: 別オーナー用 caller（${template}）を書き込みました`); }
   }
+  await reportBaynexRegistration({ repo, run: deps.ghApi || defaultRun, ...(deps.productConfigPath ? { productConfigPath: deps.productConfigPath } : {}) });
   report('✅', '確認コマンド: gh workflow run app-distribution-check.yml --ref qa -f ensure_bundle_ids=true -f register_devices=false');
   return config;
 }

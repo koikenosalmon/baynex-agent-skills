@@ -17,7 +17,7 @@ export function appEnvironment(config, index, env = {}, productConfigPath = 'bay
   const app = apps[Number(index)];
   const values = {
     APP_DIR: config.appDir || 'native',
-    PRODUCT_ID: env.PRODUCT_ID_OVERRIDE || fileProductId(productConfigPath),
+    PRODUCT_ID: env.PRODUCT_ID_OVERRIDE || fileProductId(productConfigPath) || config.baynex?.productId || '',
     WIF_PROVIDER: env.WIF_PROVIDER_OVERRIDE || config.gcp?.workloadIdentityProvider || '',
     WIF_SERVICE_ACCOUNT: env.WIF_SERVICE_ACCOUNT_OVERRIDE || config.gcp?.uploaderServiceAccount || '',
     FLUTTER_VERSION: validateFlutterVersion(config),
@@ -25,7 +25,7 @@ export function appEnvironment(config, index, env = {}, productConfigPath = 'bay
     APP_DISPLAY_NAME: app.displayName,
     APP_FLAVOR: app.flavor ?? '',
     APP_TARGET: app.target ?? '',
-    APP_APPLE_ACCOUNT: app.appleAccount,
+    APP_APPLE_ACCOUNT: app.appleAccount ?? '',
     APP_APPLE_TEAM_ID: app.appleTeamId ?? '',
     FIREBASE_APP_ID_IOS: app.firebaseAppIds?.ios ?? '',
     FIREBASE_APP_ID_ANDROID: app.firebaseAppIds?.android ?? '',

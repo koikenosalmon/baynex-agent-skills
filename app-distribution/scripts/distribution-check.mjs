@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createClient, validateApps, bundleStatus, registerDevices } from './app-store-connect.mjs';
+import { fetchAscToken } from './apple-credentials.mjs';
 import { accessSecret } from './secret-manager.mjs';
 import { fetchTesterUdids } from './firebase-udids.mjs';
 import { ensureStarted } from './firebase-activate.mjs';
@@ -121,11 +122,29 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
   else if (env.AUTH_OUTCOME !== 'success' || !token) { row('Google Cloud', 'WIF 認証', '❌', '認証失敗'); token = null; }
   else row('Google Cloud', 'WIF 認証', '✅', 'アクセストークン取得済み');
 
+  const ciStatus = env.BAYNEX_CI_STATUS;
+  if (ciStatus === 'ok') row('Baynex', 'CI アクセス', '✅', `許可されています（mode=${env.BAYNEX_CI_MODE || '?'}${config.baynex?.revision !== undefined ? `、revision ${config.baynex.revision}` : ''}）`);
+  else if (ciStatus === 'denied') row('Baynex', 'CI アクセス', '⚠️', '拒否されました（ci_denied）。Baynex の製品設定でこのリポジトリの CI アクセスを登録してください。当面は Secret Manager / GitHub Secrets を使います');
+  else if (ciStatus === 'unreachable') row('Baynex', 'CI アクセス', '⚠️', 'Baynex に接続できませんでした。apps.json と旧経路で続行します');
+  else row('Baynex', 'CI アクセス', '⚠️', '未確認です（resolve-config が実行されていないか、id-token: write がありません）');
+
+  // Key route: Baynex OIDC first, then Secret Manager, then legacy GitHub secrets.
+  let baynexAsc = null;
+  if (env.ACTIONS_ID_TOKEN_REQUEST_URL && ciStatus !== 'denied') {
+    try { baynexAsc = await fetchAscToken({ env, fetch: fetchImpl, print: () => {} }); } catch { baynexAsc = null; }
+  }
+  const legacyComplete = [env.APP_STORE_CONNECT_KEY_P8, env.APP_STORE_CONNECT_KEY_ID, env.APP_STORE_CONNECT_ISSUER_ID].every((value) => typeof value === 'string' && value.length > 0);
+  if (baynexAsc) row('鍵の取得経路', 'Apple', '✅', 'Baynex OIDC（asc-token を取得できました）');
+  else if (token) row('鍵の取得経路', 'Apple', '✅', 'Secret Manager');
+  else if (legacyComplete) row('鍵の取得経路', 'Apple', '✅', 'GitHub Secrets（旧経路。Baynex での CI 連携を推奨します）');
+  else row('鍵の取得経路', 'Apple', '⚠️', '取得できる経路がありません（Baynex OIDC / Secret Manager / GitHub Secrets）');
+
   const accountClients = new Map();
-  const usedAccounts = [...new Set(apps.map((app) => app.appleAccount))];
+  const slugOf = (app) => app.appleAccount ?? config.baynex?.apple?.name ?? 'baynex';
+  const usedAccounts = [...new Set(apps.map(slugOf))];
   for (const slug of usedAccounts) {
-    const account = config.appleAccounts[slug];
-    const accountApps = apps.filter((app) => app.appleAccount === slug);
+    const account = config.appleAccounts?.[slug];
+    const accountApps = apps.filter((app) => slugOf(app) === slug);
     const unavailable = () => {
       row(`Apple ${slug}`, 'Team ID', '⚠️', 'キー認証待ち');
       for (const app of accountApps) row(`Apple ${slug}`, app.iosBundleId, '⚠️', 'キー認証待ち');
@@ -133,7 +152,7 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
     const values = {};
     const legacy = { keyP8: env.APP_STORE_CONNECT_KEY_P8, keyId: env.APP_STORE_CONNECT_KEY_ID, issuerId: env.APP_STORE_CONNECT_ISSUER_ID };
     const completeLegacy = Object.values(legacy).every((value) => typeof value === 'string' && value.length > 0);
-    for (const [key, field] of Object.entries(fields)) {
+    if (!baynexAsc && account) for (const [key, field] of Object.entries(fields)) {
       if (token) {
         try {
           values[key] = await accessSecret({ project: account.secretProject, name: account[field], token, fetch: fetchImpl });
@@ -147,14 +166,15 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
         row(`Apple ${slug}`, account[field], '✅', '値あり（旧 GitHub Secrets）');
       } else row(`Apple ${slug}`, account[field], '⚠️', '値なし');
     }
-    if (Object.keys(values).length !== 3) { row(`Apple ${slug}`, 'キー', '⚠️', 'キーを確認できません'); unavailable(); continue; }
+    if (!baynexAsc && Object.keys(values).length !== 3) { row(`Apple ${slug}`, 'キー', '⚠️', 'キーを確認できません'); unavailable(); continue; }
     try {
-      const client = createClient({ issuerId: values.issuerId.trim(), keyId: values.keyId.trim(), keyP8: values.keyP8 }, fetchImpl);
+      const client = createClient(baynexAsc ? { token: baynexAsc.token } : { issuerId: values.issuerId.trim(), keyId: values.keyId.trim(), keyP8: values.keyP8 }, fetchImpl);
       // One request proves the key; paging through every bundle ID one at a time would hit the page cap.
       await client.request('/v1/bundleIds?limit=1');
       accountClients.set(slug, client);
       row(`Apple ${slug}`, 'キー', '✅', '認証成功');
-      try {
+      // With a Baynex-issued token the key belongs to Baynex, so the Admin-role probe applies only to our own keys.
+      if (!baynexAsc) try {
         await client.request('/v1/users?limit=1');
         row(`Apple ${slug}`, 'クラウド署名の権限', '✅', 'チームキーの権限は十分です（/v1/users 200）');
       } catch (error) {
@@ -225,7 +245,7 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
   }
   if (env.REGISTER_DEVICES === 'true') {
     for (const slug of usedAccounts) {
-      const accountApps = apps.filter((app) => app.appleAccount === slug);
+      const accountApps = apps.filter((app) => slugOf(app) === slug);
       const client = accountClients.get(slug);
       if (!client || !token) row(`Apple ${slug}`, '端末登録', '⚠️', 'Apple または Google の認証が必要です');
       else if (accountApps.some((app) => !udidsByApp.has(app.id))) row(`Apple ${slug}`, '端末登録', '❌', 'Firebase UDID をすべて取得できませんでした');

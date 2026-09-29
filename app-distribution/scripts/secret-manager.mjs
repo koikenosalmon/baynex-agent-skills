@@ -53,14 +53,15 @@ export async function loadAccount(account, token, fetchImpl = fetch) {
   return values;
 }
 
-export async function writeAccountFiles({ config, slug, directory, token, fallback, fetch: fetchImpl = fetch, print = console.log }) {
+export async function writeAccountFiles({ config, slug, directory, token, fallback, fetch: fetchImpl = fetch, print = console.log, onSource }) {
   const accounts = validateAppleAccounts(config);
   if (!Object.hasOwn(accounts, slug)) throw new Error(`Apple アカウントがありません: ${slug}`);
   if (!directory) throw new Error('出力先ディレクトリがありません');
   const completeFallback = ['keyP8', 'keyId', 'issuerId'].every((key) => typeof fallback?.[key] === 'string' && fallback[key].length > 0);
   let values;
+  let source = 'github-secrets';
   if (token) {
-    try { values = await loadAccount(accounts[slug], token, fetchImpl); }
+    try { values = await loadAccount(accounts[slug], token, fetchImpl); source = 'secret-manager'; }
     catch (error) { if (!completeFallback) throw error; values = fallback; }
   } else if (completeFallback) values = fallback;
   if (!values) throw new Error('Secret Manager の認証、または 3 件そろった旧 GitHub Secrets が必要です');
@@ -68,6 +69,7 @@ export async function writeAccountFiles({ config, slug, directory, token, fallba
   for (const [key, filename] of Object.entries({ keyP8: 'app-store-connect.p8', keyId: 'app-store-connect-key-id', issuerId: 'app-store-connect-issuer-id' })) {
     await writeFile(join(directory, filename), values[key], { mode: 0o600, flag: 'w' });
   }
+  onSource?.(source);
   print(`::add-mask::${values.keyId}`);
   print(`::add-mask::${values.issuerId}`);
   return values;
