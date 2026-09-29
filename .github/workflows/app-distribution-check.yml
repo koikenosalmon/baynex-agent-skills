@@ -66,6 +66,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Resolve distribution configuration
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/resolve-config.mjs
       - id: config
         name: Read configuration
         env:

@@ -2,6 +2,7 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { fetchAscToken } from './apple-credentials.mjs';
 import { validateAppleAccounts } from './secret-manager.mjs';
 import { readConfig, splitConfigArgs, validateBuildNumberOffset, validateFlutterVersion, validatePrivateGitDependencies } from './config.mjs';
 
@@ -15,13 +16,16 @@ export function validateUdid(udid) {
 }
 export function validateApps(config) {
   if (!config || !Array.isArray(config.apps) || config.apps.length === 0 || config.apps.length > 20) throw new Error('apps.json の apps が不正です');
-  const accounts = validateAppleAccounts(config);
+  // When Baynex provides the Apple credentials, appleAccounts / appleAccount are optional (no duplicated names).
+  const baynexApple = config.baynex?.apple?.available === true;
+  const accounts = baynexApple && config.appleAccounts === undefined ? {} : validateAppleAccounts(config);
   validatePrivateGitDependencies(config);
   validateFlutterVersion(config);
   validateBuildNumberOffset(config);
   return config.apps.map((app) => {
     if (!app || typeof app.id !== 'string' || !/^[a-z][a-z0-9-]{0,30}$/.test(app.id) || typeof app.iosBundleId !== 'string' || !bundlePattern.test(app.iosBundleId) || typeof app.displayName !== 'string' || app.displayName.length < 1 || app.displayName.length > 80 || (app.appleTeamId !== undefined && !teamPattern.test(app.appleTeamId))) throw new Error('apps.json の iOS 設定が不正です');
-    if (typeof app.appleAccount !== 'string' || !Object.hasOwn(accounts, app.appleAccount)) throw new Error(`apps.json の Apple アカウント参照が不正です: ${app.id}`);
+    const accountOptional = baynexApple && (app.appleAccount === undefined || !Object.keys(accounts).length);
+    if (!accountOptional && (typeof app.appleAccount !== 'string' || !Object.hasOwn(accounts, app.appleAccount))) throw new Error(`apps.json の Apple アカウント参照が不正です: ${app.id}`);
     return app;
   });
 }
@@ -35,8 +39,9 @@ export function createJwt({ issuerId, keyId, keyP8, now = Date.now() }) {
   const unsigned = `${encode({ alg: 'ES256', kid: keyId, typ: 'JWT' })}.${encode({ iss: issuerId, iat, exp: iat + 1190, aud: 'appstoreconnect-v1' })}`;
   return `${unsigned}.${sign('sha256', Buffer.from(unsigned), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
 }
+// credentials is either { token } (a JWT minted by Baynex) or { issuerId, keyId, keyP8 } (signed here).
 export function createClient(credentials, fetchImpl = fetch) {
-  const jwt = createJwt(credentials);
+  const jwt = credentials.token ?? createJwt(credentials);
   async function request(path, options = {}) {
     const response = await fetchImpl(new URL(path, BASE), { ...options, headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}) } });
     if (!response.ok) {
@@ -125,10 +130,13 @@ export async function runCli(args, env = process.env, fetchImpl = fetch) {
   ({ args, env } = splitConfigArgs(args, env));
   const [command, argument] = args;
   if (!['check', 'ensure-bundle-ids', 'register-devices'].includes(command) || (command === 'register-devices' ? !argument || args.length !== 2 : args.length > 2)) throw new Error('使い方: app-store-connect.mjs check|ensure-bundle-ids [app-id]|register-devices <file>');
-  const keyP8 = env.APP_STORE_CONNECT_KEY_P8_FILE ? await readFile(env.APP_STORE_CONNECT_KEY_P8_FILE, 'utf8') : env.APP_STORE_CONNECT_KEY_P8;
-  const keyId = env.APP_STORE_CONNECT_KEY_ID_FILE ? await readFile(env.APP_STORE_CONNECT_KEY_ID_FILE, 'utf8') : env.APP_STORE_CONNECT_KEY_ID;
-  const issuerId = env.APP_STORE_CONNECT_ISSUER_ID_FILE ? await readFile(env.APP_STORE_CONNECT_ISSUER_ID_FILE, 'utf8') : env.APP_STORE_CONNECT_ISSUER_ID;
-  const client = createClient({ issuerId: issuerId?.trim(), keyId: keyId?.trim(), keyP8 }, fetchImpl);
+  // Prefer the short-lived ASC token from Baynex; fall back to signing a JWT from the loaded key.
+  let client;
+  if (env.ACTIONS_ID_TOKEN_REQUEST_URL && env.BAYNEX_ASC_TOKEN !== 'off') {
+    try { client = createClient({ token: (await fetchAscToken({ env, fetch: fetchImpl })).token }, fetchImpl); console.error('ASC API の認証: Baynex asc-token'); }
+    catch (error) { console.error(`Baynex asc-token を使えません（${error.message}）。取得済みの鍵で JWT を作ります`); }
+  }
+  if (!client) client = await keyClient(env, fetchImpl);
   if (command === 'register-devices') return registerDevices(client, JSON.parse(await readFile(argument, 'utf8')));
   const config = await readConfig(env);
   const apps = validateApps(config);
@@ -136,6 +144,12 @@ export async function runCli(args, env = process.env, fetchImpl = fetch) {
   if (!selected.length) throw new Error(`アプリがありません: ${argument}`);
   if (new Set(selected.map((app) => app.appleAccount)).size !== 1) throw new Error('Apple アカウントを指定してアプリを選択してください');
   return bundleStatus(client, selected, command === 'ensure-bundle-ids');
+}
+async function keyClient(env, fetchImpl) {
+  const keyP8 = env.APP_STORE_CONNECT_KEY_P8_FILE ? await readFile(env.APP_STORE_CONNECT_KEY_P8_FILE, 'utf8') : env.APP_STORE_CONNECT_KEY_P8;
+  const keyId = env.APP_STORE_CONNECT_KEY_ID_FILE ? await readFile(env.APP_STORE_CONNECT_KEY_ID_FILE, 'utf8') : env.APP_STORE_CONNECT_KEY_ID;
+  const issuerId = env.APP_STORE_CONNECT_ISSUER_ID_FILE ? await readFile(env.APP_STORE_CONNECT_ISSUER_ID_FILE, 'utf8') : env.APP_STORE_CONNECT_ISSUER_ID;
+  return createClient({ issuerId: issuerId?.trim(), keyId: keyId?.trim(), keyP8 }, fetchImpl);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { console.log(JSON.stringify(await runCli(process.argv.slice(2)))); }

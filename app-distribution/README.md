@@ -9,6 +9,38 @@ Flutter アプリの GitHub リポジトリを Baynex「アプリ配布」に接
 
 生成された `flavor` と `target` の確認はアプリの既存コードと照合して行います。判断できない場合だけアプリチームに聞いてください。
 
+## Baynex で CI 連携を有効にする（推奨）
+
+Baynex の製品にこのリポジトリの CI アクセスを登録すると、CI は GitHub Actions の OIDC トークンで `https://api.baynex.jp/ci/v1/*` に問い合わせ、Apple 鍵と配布設定を Baynex から受け取ります。Secret Manager の Apple 鍵や GitHub Secrets の `APP_STORE_CONNECT_*` を用意しなくても、iOS のクラウド署名と bundle ID / 端末登録が動きます。
+
+1. `bootstrap.mjs` の出力（またはその末尾）に表示される `repositoryId` と `ownerId` を控えます。手動なら `gh api repos/<owner>/<repo> --jq '.id,.owner.id'` です。
+2. Baynex の製品ページ `https://preview.baynex.jp/products/<productId>?view=apps`（`baynex/config.json` の `productId` から `bootstrap.mjs` が表示します）で、CI アクセスにそのリポジトリを登録して有効にします。
+3. `app-distribution-check.yml` を実行し、Summary の `Baynex | CI アクセス` が ✅、`鍵の取得経路 | Apple` が `Baynex OIDC` になっていることを確認します。
+
+Baynex は、kit の reusable workflow（`app-distribution.yml` / `app-distribution-check.yml`）を `main`、`vN`、`vN*` タグの参照で呼んだ、GitHub ホストランナー上の `push` / `workflow_dispatch` / `schedule` の実行だけを受け付けます。登録済みで有効なリポジトリであることも必要です。OIDC トークンは 1 回限りなので、呼び出しごとに新しいトークンを取得します（値はログに出さず `::add-mask::` で隠します）。caller には `id-token: write` が必要です（テンプレートには含まれています）。
+
+配布設定の扱い（`scripts/resolve-config.mjs`、detect ジョブと各ジョブの冒頭で実行）:
+
+| Baynex の mode | 動作 |
+| --- | --- |
+| `baynex` | Firebase の ID、bundle ID、`flutterVersion`、`privateGitDependencies`（空でなければ）、ビルド番号のオフセットを Baynex の値で `apps.json` に上書きします。Baynex が値を持たない項目（`flavor`、`target`、`appDir` など）は `apps.json` のまま残ります。 |
+| `repo` | `apps.json` をそのまま使います。`buildNumberOffset` が `apps.json` にないときだけ Baynex の値を取り込みます。 |
+| 拒否・未到達 | 警告を出して `apps.json` を使います（従来どおり）。 |
+
+`distribution/apps.json` がなく Baynex がアプリを返す場合は、`$RUNNER_TEMP/effective-apps.json` に実効設定を生成して使います。Baynex が Apple 鍵を提供できるとき、`appleAccount` と `appleAccounts` は省略できます（名前を二重に管理しません）。
+
+Apple 鍵の取得順（iOS ジョブ、`scripts/apple-credentials.mjs`）:
+
+1. Baynex OIDC の `cloud-signing`（QA / release の ref だけ）。`.p8` と Key ID / Issuer ID を `$RUNNER_TEMP/apple-account/` に 0600 で書きます。
+2. 401 / 403 / 404 / 通信エラーなどのときは Secret Manager（`secret-manager.mjs` の `load-account`）。
+3. それも使えなければ、旧 GitHub Secrets（`APP_STORE_CONNECT_KEY_P8` / `_KEY_ID` / `_ISSUER_ID`）。
+
+どの経路を使ったかはログと Summary に出ます（値は出しません）。bundle ID の登録・端末登録・check の App Store Connect API 呼び出しは、まず Baynex の `asc-token`（約 20 分有効の JWT）を使い、取得できなければ読み込んだ鍵から JWT を作ります。
+
+## Baynex を使わない場合（従来の経路）
+
+CI アクセスを登録しなくても、これまでの手順（Secret Manager に Apple 鍵を登録、`distribution/apps.json` に設定を持つ）でそのまま動きます。Baynex への問い合わせが拒否されても workflow は失敗せず、警告を出して従来の経路にフォールバックします。
+
 ## 新しいプロジェクト
 
 Node.js 20 以上と `gcloud` を用意します。Firebase iOS / Android アプリが属する GCP プロジェクトで操作権限が必要です。アプリリポジトリのルートから、キットを隣のディレクトリに clone して実行します。
@@ -70,6 +102,8 @@ Summary の表に次の行が追加されます（secret の値は表示しま�
 
 | 区分 | 内容 |
 | --- | --- |
+| Baynex | `CI アクセス`。resolve-config の結果（許可 ✅ / 拒否・未到達 ⚠️）。 |
+| 鍵の取得経路 | Apple の鍵を Baynex OIDC / Secret Manager / GitHub Secrets のどれで取れるか（この順に優先）。 |
 | GitHub Secrets | 宣言した 9 件の secret が実際に届いたか（有無のみ）。任意の secret は未受信でも ⚠️ です。 |
 | Caller | 別オーナーの caller が `secrets: inherit` を使っていれば ❌。 |
 | Secret マスク | 受信した secret の値（3 文字以上）が `apps.json` の文字列に含まれると ❌。secret 名と `apps.json` のキーだけを表示します（下の『マスクの衝突』参照）。 |
@@ -137,6 +171,7 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 | --- | --- |
 | Firebase リリース一覧が 404 | bootstrap と workflow が probe upload で自動開始します。失敗時は API と `roles/firebaseappdistro.admin` を確認します。 |
 | GitHub WIF 認証に失敗 | IAM 反映に約 5 分かかることがあります。待って再実行し、repo 条件と `roles/iam.workloadIdentityUser` を確認します。 |
+| check の Baynex CI アクセスが ⚠️ 拒否 | Baynex の製品設定でこのリポジトリ（`repositoryId` / `ownerId`）を登録して有効にします。未登録でも従来の経路で動きます。 |
 | Apple secret が空または読めない | 所有者に console で新しいバージョンを登録してもらい、`secretAccessor` を確認します。 |
 | `Cloud billing quota exceeded` | GCP プロジェクト作成時の課金枠です。所有者に枠の解消を依頼し、勝手に別プロジェクトへ変更しません。 |
 | `flavor` / `target` が `TODO` | アプリチームに実際の Flutter 設定を確認します。 |

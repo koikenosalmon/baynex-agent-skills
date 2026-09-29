@@ -49,3 +49,13 @@ test('the CLI appends the app to GITHUB_ENV', async (t) => {
   const lines = (await readFile(join(dir, 'env'), 'utf8')).trim().split('\n');
   assert.ok(lines.includes('APP_ID=two') && lines.includes('APP_DIR=mobile'));
 });
+
+test('appleAccount may be absent and the product id can come from Baynex', () => {
+  const { appleAccounts, ...rest } = config;
+  const app = { ...rest.apps[0] };
+  delete app.appleAccount;
+  const values = appEnvironment({ ...rest, apps: [app], baynex: { productId: 'prod_9', apple: { available: true } } }, 0, {}, '/nonexistent');
+  assert.equal(values.APP_APPLE_ACCOUNT, '');
+  assert.equal(values.PRODUCT_ID, 'prod_9');
+  assert.equal(appEnvironment({ ...rest, apps: [app], baynex: { productId: 'prod_9', apple: { available: true } } }, 0, { PRODUCT_ID_OVERRIDE: 'override' }, '/nonexistent').PRODUCT_ID, 'override');
+});

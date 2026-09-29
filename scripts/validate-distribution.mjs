@@ -54,7 +54,7 @@ assert(server?.command === 'node' && server.args?.[0] === './scripts/baynex-mcp-
 assert(server.env_vars?.length === 3, 'MCP config must declare only canonical credential names');
 
 export async function validateKitLayout(kitRoot = new URL('../app-distribution/', import.meta.url), workflowRoot = new URL('../.github/workflows/', import.meta.url)) {
-  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs'];
+  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs', 'baynex-oidc.mjs', 'apple-credentials.mjs', 'resolve-config.mjs'];
   for (const file of scripts) {
     const source = await readFile(new URL(`scripts/${file}`, kitRoot), 'utf8');
     assert(source.length > 0, `${file}: empty kit script`);
@@ -67,11 +67,19 @@ export async function validateKitLayout(kitRoot = new URL('../app-distribution/'
   assert((build.match(/git-dependencies\.mjs setup/g) || []).length === 2 && (build.match(/git-dependencies\.mjs cleanup/g) || []).length === 2, 'app-distribution.yml: Android and iOS jobs must set up and clean up private Git dependencies');
   assert((build.match(/scripts\/load-app\.mjs/g) || []).length === 2, 'app-distribution.yml: Android and iOS jobs must re-read their app from apps.json by matrix index');
   assert((build.match(/scripts\/build-number\.mjs/g) || []).length === 2 && !/--build-number="\$RUN_NUMBER"/.test(build), 'app-distribution.yml: both jobs must take the build number from build-number.mjs');
+  assert((build.match(/scripts\/resolve-config\.mjs/g) || []).length === 3 && /scripts\/apple-credentials\.mjs load /.test(build), 'app-distribution.yml: detect and both jobs must resolve the config through Baynex, and the iOS job must load keys through apple-credentials.mjs');
+  assert(!/GITHUB_WORKSPACE\/\$DISTRIBUTION_CONFIG/.test(build), 'app-distribution.yml: DISTRIBUTION_CONFIG points at the resolved effective config and must not be prefixed with the workspace');
   assert(!/matrix\.app\b/.test(build) && /index: \$\{\{ fromJSON\(needs\.detect\.outputs\.matrix\) \}\}/.test(build), 'app-distribution.yml: the matrix must carry only app indices');
   const detectOutputs = build.match(/^  detect:[\s\S]*?\n    outputs:\n([\s\S]*?)\n    steps:/m)?.[1] || '';
   assert([...detectOutputs.matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1]).sort().join() === 'android_signing,app_present,matrix,wif_ready', 'app-distribution.yml: detect outputs must be flags and indices only, never config values');
   assert(!/needs\.detect\.outputs\.(?:app_dir|product_id|wif_provider|wif_service_account|flutter_version)/.test(build), 'app-distribution.yml: config values must not be read from job outputs');
   assert(!/git config --global|persist-credentials: true/.test(build), 'app-distribution.yml: credentials must not be persisted in global git config');
+  const check = await readFile(new URL('app-distribution-check.yml', workflowRoot), 'utf8');
+  assert(/scripts\/resolve-config\.mjs/.test(check), 'app-distribution-check.yml: must resolve the config through Baynex before reading it');
+  for (const file of ['app-distribution.yml', 'app-distribution-check.yml']) {
+    const workflow = file === 'app-distribution.yml' ? build : check;
+    assert(/^permissions:\n {2}contents: read\n {2}id-token: write$/m.test(workflow), `${file}: id-token: write is required for Baynex OIDC`);
+  }
   for (const file of ['bootstrap.mjs', 'add-apple-account.mjs', 'grant-apple-account.mjs', 'README.md']) assert((await readFile(new URL(file, kitRoot), 'utf8')).length > 0, `missing ${file}`);
   for (const file of ['app-distribution.yml', 'app-distribution-check.yml']) {
     const workflow = await readFile(new URL(file, workflowRoot), 'utf8');

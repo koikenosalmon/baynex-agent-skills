@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { bootstrap, pairApps, PairingError, parsePairSpecs } from './bootstrap.mjs';
+import { bootstrap, pairApps, PairingError, parsePairSpecs, reportBaynexRegistration } from './bootstrap.mjs';
 import { detectPrivateDependencies, githubGitDependencies, provisionDependencyCredential } from './private-dependencies.mjs';
+
+const offlineGh = () => ({ status: 1, stdout: '', stderr: '' });
 
 const ios = [
   { appId: '1:000000000000:ios:abc', displayName: 'Example Coach iOS dev', bundleId: 'com.example.coach' },
@@ -56,7 +58,7 @@ test('dry run discovers apps without writing config or printing the OAuth token'
   console.log = (line) => lines.push(String(line));
   try {
     await bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out, dryRun: true }, {
-      callerDir: dir, interactive: false,
+      callerDir: dir, interactive: false, ghApi: offlineGh,
       gcloud: (args) => {
         calls.push(args);
         if (args[0] === 'projects') return '000000000000';
@@ -88,7 +90,7 @@ test('bootstrap writes caller config and checks both Firebase distributions', as
   console.log = () => {};
   let config;
   try { config = await bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out }, {
-    callerDir: dir, interactive: false,
+    callerDir: dir, interactive: false, ghApi: offlineGh,
     gcloud: (args) => {
       if (args[0] === 'projects' && args[1] === 'describe') return '000000000000';
       if (args[0] === 'services' && args[1] === 'list') return ['iam', 'iamcredentials', 'sts', 'firebaseappdistribution', 'firebase'].map((api) => `${api}.googleapis.com`).join('\n');
@@ -123,7 +125,7 @@ test('bootstrap rerun keeps privateGitDependencies and flutterVersion from the e
   console.log = () => {};
   let config;
   try { config = await bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out }, {
-    callerDir: dir, interactive: false,
+    callerDir: dir, interactive: false, ghApi: offlineGh,
     gcloud: (args) => {
       if (args[0] === 'projects' && args[1] === 'describe') return '000000000000';
       if (args[0] === 'services' && args[1] === 'list') return ['iam', 'iamcredentials', 'sts', 'firebaseappdistribution', 'firebase'].map((api) => `${api}.googleapis.com`).join('\n');
@@ -212,7 +214,7 @@ const fetchStub = async (url) => {
 test('cross-owner repos get the explicit-secrets caller templates written; same-owner keeps print-only', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'app-kit-callers-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const base = { gcloud: gcloudStub, ensureResource: () => {}, grantAppleAccount: () => {}, fetch: fetchStub, interactive: false, detectPrivateDependencies: async () => ({ repos: [] }) };
+  const base = { gcloud: gcloudStub, ensureResource: () => {}, grantAppleAccount: () => {}, fetch: fetchStub, interactive: false, ghApi: offlineGh, detectPrivateDependencies: async () => ({ repos: [] }) };
   const crossDir = join(dir, 'cross'), sameDir = join(dir, 'same');
   await quiet(() => bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out: join(dir, 'a.json') }, { ...base, callerDir: crossDir }));
   const build = await readFile(join(crossDir, 'app-distribution.yml'), 'utf8');
@@ -235,7 +237,7 @@ test('bootstrap adds detected private dependencies, keeps buildNumberOffset and 
   const out = join(dir, 'apps.json');
   await writeFile(out, JSON.stringify({ buildNumberOffset: 100, privateGitDependencies: ['a/one'] }));
   const provisioned = [];
-  const base = { gcloud: gcloudStub, ensureResource: () => {}, grantAppleAccount: () => {}, fetch: fetchStub, interactive: false, callerDir: dir, detectPrivateDependencies: async () => ({ repos: ['A/ONE', 'b/two'] }), run: (command, args) => { provisioned.push([command, ...args]); return { status: 0, stdout: 'GIT_DEPENDENCY_TOKEN\n', stderr: '' }; } };
+  const base = { gcloud: gcloudStub, ensureResource: () => {}, grantAppleAccount: () => {}, fetch: fetchStub, interactive: false, ghApi: offlineGh, callerDir: dir, detectPrivateDependencies: async () => ({ repos: ['A/ONE', 'b/two'] }), run: (command, args) => { provisioned.push([command, ...args]); return { status: 0, stdout: 'GIT_DEPENDENCY_TOKEN\n', stderr: '' }; } };
   const config = await quiet(() => bootstrap({ project: 'example-dev', repo: 'example/app', appleAccount: 'example', out }, base));
   assert.deepEqual(config.privateGitDependencies, ['a/one', 'b/two']);
   assert.equal(config.buildNumberOffset, 100);
@@ -321,4 +323,33 @@ test('other deploy-key failures, dry runs, existing secrets and multiple depende
   const existing = (command, args) => (args[0] === 'secret' ? { status: 0, stdout: 'GIT_DEPENDENCY_TOKEN\n', stderr: '' } : (() => { throw new Error('must not run'); })());
   assert.equal(quietRun(() => provisionDependencyCredential({ appRepo: 'e/a', repos: ['o/p'], run: existing })), 'exists');
   assert.equal(provisionDependencyCredential({ appRepo: 'e/a', repos: [], run: existing }), 'none');
+});
+
+test('bootstrap prints the repository and owner ids and the Baynex settings URL', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'app-kit-bootstrap-baynex-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const productConfig = join(dir, 'config.json');
+  await writeFile(productConfig, JSON.stringify({ productId: 'prod_123' }));
+  const lines = [];
+  const original = console.log;
+  console.log = (line) => lines.push(String(line));
+  const calls = [];
+  let result;
+  try { result = await reportBaynexRegistration({ repo: 'example/app', productConfigPath: productConfig, run: (command, args) => { calls.push([command, ...args]); return { status: 0, stdout: '4242\t99\n', stderr: '' }; } }); } finally { console.log = original; }
+  assert.deepEqual(result, { repositoryId: '4242', ownerId: '99', productId: 'prod_123' });
+  assert.deepEqual(calls[0].slice(0, 3), ['gh', 'api', 'repos/example/app']);
+  const output = lines.join('\n');
+  assert.match(output, /repositoryId=4242 ownerId=99/);
+  assert.match(output, /https:\/\/preview\.baynex\.jp\/products\/prod_123\?view=apps/);
+});
+
+test('bootstrap degrades to guidance when gh or the product id is unavailable', async () => {
+  const lines = [];
+  const original = console.log;
+  console.log = (line) => lines.push(String(line));
+  let result;
+  try { result = await reportBaynexRegistration({ repo: 'example/app', productConfigPath: '/nonexistent/config.json', run: offlineGh }); } finally { console.log = original; }
+  assert.deepEqual(result, { repositoryId: undefined, ownerId: undefined, productId: '' });
+  assert.match(lines.join('\n'), /取得できません/);
+  assert.match(lines.join('\n'), /productId がありません/);
 });

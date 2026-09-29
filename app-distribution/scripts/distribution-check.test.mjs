@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fakeFetch, json as jsonResponse, oidcEnv } from './baynex-test-helpers.mjs';
 import { runCheck, distributionNotStarted, findInheritingCallers, findSecretCollisions } from './distribution-check.mjs';
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -197,4 +198,44 @@ test('build number row warns when run_number + offset is lower than the newest F
   assert.ok(!none.summary.includes('ビルド番号'));
   assert.ok(!(await runFull({ buildVersions: [50] })).summary.includes('ビルド番号'));
   await assert.rejects(() => runFull({}, {}, { buildNumberOffset: -1 }), /buildNumberOffset/);
+});
+
+const bxToken = 'eyJhbGciOiJFUzI1NiJ9.baynex-check.signature-value';
+function baynexRun(baynex, env = {}, config = { appleAccounts: accounts, apps }) {
+  const inner = fakeFetch(baynex);
+  const seen = [];
+  const fetch = async (url, options) => {
+    const address = String(url);
+    if (address.includes('api.appstoreconnect.apple.com')) { seen.push(options.headers.Authorization); return jsonResponse({ data: address.includes('limit=1') ? [] : [{ attributes: { identifier: 'com.example.example', seedId: 'ABCDE12345' } }] }); }
+    if (address.includes('secretmanager.googleapis.com')) return jsonResponse({ payload: { data: Buffer.from(values[address.split('/')[7]]).toString('base64') } });
+    if (address.includes('firebaseappdistribution') || address.includes('testers')) return jsonResponse({}, 404);
+    return inner.fetch(url, options);
+  };
+  return runCheck({ config, env: { ...oidcEnv, ...env }, print: () => {}, fetch }).then((result) => ({ result, seen }));
+}
+
+test('check shows Baynex OIDC as the key route and the CI access row', async () => {
+  const { result, seen } = await baynexRun(() => jsonResponse({ token: bxToken, teamId: 'ABCDE12345', expiresAt: 'x' }), { BAYNEX_CI_STATUS: 'ok', BAYNEX_CI_MODE: 'baynex' }, { apps: [{ ...apps[0], appleAccount: undefined }], baynex: { revision: 3, apple: { name: 'Baynex Apple', available: true } } });
+  assert.match(result.summary, /Baynex \| CI アクセス \| ✅ \| 許可されています（mode=baynex、revision 3）/);
+  assert.match(result.summary, /鍵の取得経路 \| Apple \| ✅ \| Baynex OIDC/);
+  assert.match(result.summary, /Apple Baynex Apple \| キー \| ✅/);
+  assert.ok(seen.length && seen.every((value) => value === `Bearer ${bxToken}`));
+  assert.ok(!result.summary.includes(bxToken) && !result.summary.includes('oidc-token'));
+});
+
+test('check shows denied Baynex access and the Secret Manager or GitHub Secrets route', async () => {
+  const denied = () => jsonResponse({ error: 'ci_denied' }, 403);
+  const smRun = await baynexRun(denied, { BAYNEX_CI_STATUS: 'denied', AUTH_OUTCOME: 'success', GOOGLE_OAUTH_ACCESS_TOKEN: 'token', WIF_PROVIDER: 'p', WIF_SERVICE_ACCOUNT: 's' });
+  assert.match(smRun.result.summary, /Baynex \| CI アクセス \| ⚠️ \| 拒否されました（ci_denied）/);
+  assert.match(smRun.result.summary, /鍵の取得経路 \| Apple \| ✅ \| Secret Manager/);
+  assert.equal(smRun.result.summary.includes('Baynex OIDC'), false);
+  const legacy = await baynexRun(denied, { APP_STORE_CONNECT_KEY_P8: keyP8, APP_STORE_CONNECT_KEY_ID: 'ABC1234567', APP_STORE_CONNECT_ISSUER_ID: '12345678-1234-1234-1234-123456789abc' });
+  assert.match(legacy.result.summary, /Baynex \| CI アクセス \| ⚠️ \| 未確認/);
+  assert.match(legacy.result.summary, /鍵の取得経路 \| Apple \| ✅ \| GitHub Secrets/);
+  assert.ok(!legacy.result.summary.includes('MIG'));
+});
+
+test('a Baynex asc-token failure (429) falls back to the next key route', async () => {
+  const { result } = await baynexRun(() => jsonResponse({ error: 'ci_rate_limited' }, 429), { BAYNEX_CI_STATUS: 'ok', BAYNEX_CI_MODE: 'repo' });
+  assert.match(result.summary, /鍵の取得経路 \| Apple \| ⚠️ \| 取得できる経路がありません/);
 });
