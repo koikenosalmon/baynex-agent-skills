@@ -5,7 +5,7 @@ import { appendFileSync } from 'node:fs';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { postBaynex } from './baynex-oidc.mjs';
+import { postBaynex, toStderr } from './baynex-oidc.mjs';
 import { readConfig, splitConfigArgs } from './config.mjs';
 import { writeAccountFiles } from './secret-manager.mjs';
 
@@ -21,14 +21,14 @@ function maskAll(values, print) {
 export async function fetchAscToken(options = {}) {
   const data = await postBaynex('/ci/v1/apple-credentials', { purpose: 'asc-token' }, options);
   if (typeof data.token !== 'string' || data.token.length < 20 || /\s/.test(data.token)) throw new Error('Baynex の asc-token 応答が不正です');
-  (options.print || console.log)(`::add-mask::${data.token}`);
+  (options.print || toStderr)(`::add-mask::${data.token}`);
   return { token: data.token, teamId: typeof data.teamId === 'string' ? data.teamId : '', expiresAt: data.expiresAt };
 }
 
 export async function fetchCloudSigning(options = {}) {
   const data = await postBaynex('/ci/v1/apple-credentials', { purpose: 'cloud-signing' }, options);
   if (!keyIdPattern.test(data.keyId || '') || !issuerPattern.test(data.issuerId || '') || typeof data.privateKey !== 'string' || !data.privateKey.includes('PRIVATE KEY')) throw new Error('Baynex の cloud-signing 応答が不正です');
-  maskAll([data.keyId, data.issuerId, data.privateKey], options.print || console.log);
+  maskAll([data.keyId, data.issuerId, data.privateKey], options.print || toStderr);
   return { keyId: data.keyId, issuerId: data.issuerId, keyP8: data.privateKey };
 }
 
@@ -41,7 +41,7 @@ export async function writeCredentialFiles(directory, values) {
   }
 }
 
-export async function loadAppleCredentials({ slug = '', directory, config, env = process.env, fetch: fetchImpl = fetch, print = console.log, warn = console.error, loadFallback = writeAccountFiles }) {
+export async function loadAppleCredentials({ slug = '', directory, config, env = process.env, fetch: fetchImpl = fetch, print = toStderr, warn = toStderr, loadFallback = writeAccountFiles }) {
   if (!directory) throw new Error('出力先ディレクトリがありません');
   const skipBaynex = config?.baynex?.apple?.available === false;
   if (!skipBaynex) {

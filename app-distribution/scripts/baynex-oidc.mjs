@@ -2,6 +2,8 @@
 // Each OIDC token is single-use on the Baynex side, so every call requests a fresh one.
 // Tokens and response bodies are never printed; only status codes and short error codes are.
 export const BAYNEX_API = 'https://api.baynex.jp';
+// Diagnostics and ::add-mask:: commands go to stderr: callers capture stdout (jq, $(...)) as machine-readable payload.
+export const toStderr = (line) => { process.stderr.write(`${line}\n`); };
 const codePattern = /^[a-z][a-z_]{0,40}$/;
 
 export class BaynexError extends Error {
@@ -18,7 +20,7 @@ async function withTimeout(fetchImpl, url, options, timeoutMs) {
   return fetchImpl(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
 }
 
-export async function fetchOidcToken(audience, { env = process.env, fetch: fetchImpl = fetch, print = console.log, timeoutMs = 10000 } = {}) {
+export async function fetchOidcToken(audience, { env = process.env, fetch: fetchImpl = fetch, print = toStderr, timeoutMs = 10000 } = {}) {
   const requestUrl = env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!requestUrl || !requestToken) throw new BaynexError('GitHub OIDC トークンを取得できません（workflow に permissions: id-token: write が必要です）', { code: 'oidc_unavailable' });
@@ -36,7 +38,7 @@ export async function fetchOidcToken(audience, { env = process.env, fetch: fetch
 }
 
 // POSTs a JSON body to the Baynex CI API and returns the parsed JSON. Throws BaynexError otherwise.
-export async function postBaynex(path, body, { env = process.env, fetch: fetchImpl = fetch, print = console.log, timeoutMs = 15000, baseUrl = BAYNEX_API } = {}) {
+export async function postBaynex(path, body, { env = process.env, fetch: fetchImpl = fetch, print = toStderr, timeoutMs = 15000, baseUrl = BAYNEX_API } = {}) {
   if (!/^\/ci\/v1\/[a-z-]+$/.test(path)) throw new Error('Baynex CI API のパスが不正です');
   const url = `${baseUrl}${path}`;
   const token = await fetchOidcToken(url, { env, fetch: fetchImpl, print, timeoutMs });
