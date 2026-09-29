@@ -189,23 +189,6 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          # Cloud signing only works where Xcode already holds the private key of a
-          # certificate it created. A fresh runner holds none, so it tries to mint
-          # another distribution certificate and Apple refuses. When the account
-          # carries one, put it in a keychain that lives and dies with this run.
-          if [[ -f "$RUNNER_TEMP/apple-account/distribution.p12" ]]; then
-            keychain="$RUNNER_TEMP/baynex-signing.keychain-db"
-            keychain_password="$(openssl rand -base64 24)"
-            security create-keychain -p "$keychain_password" "$keychain"
-            security set-keychain-settings -lut 3600 "$keychain"
-            security unlock-keychain -p "$keychain_password" "$keychain"
-            security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P '' -T /usr/bin/codesign -T /usr/bin/security
-            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
-            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-            echo "署名: Secret Manager の配布証明書を使用"
-          else
-            echo "署名: 配布証明書の設定が無いため cloud signing"
-          fi
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--flavor "$FLAVOR" -t "$TARGET" --release --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
@@ -361,6 +344,23 @@ jobs:
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--release --no-codesign --flavor "$FLAVOR" -t "$TARGET" --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
+          # Cloud signing only works where Xcode already holds the private key of a
+          # certificate it created. A fresh runner holds none, so it tries to mint
+          # another distribution certificate and Apple refuses. When the account
+          # carries one, put it in a keychain that lives and dies with this run.
+          if [[ -f "$RUNNER_TEMP/apple-account/distribution.p12" ]]; then
+            keychain="$RUNNER_TEMP/baynex-signing.keychain-db"
+            keychain_password="$(openssl rand -base64 24)"
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P '' -T /usr/bin/codesign -T /usr/bin/security
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+            echo "署名: Secret Manager の配布証明書を使用"
+          else
+            echo "署名: 配布証明書の設定が無いため cloud signing"
+          fi
           flutter build ios "${args[@]}"
           major=$(xcodebuild -version | awk '/^Xcode / {split($2,a,"."); print a[1]}')
           method=ad-hoc
