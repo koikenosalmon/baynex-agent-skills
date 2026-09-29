@@ -15,6 +15,22 @@ on:
       register_devices:
         type: boolean
         default: false
+    secrets:
+      APP_STORE_CONNECT_KEY_P8:
+        required: false
+        description: App Store Connect API key (.p8 contents)
+      APP_STORE_CONNECT_KEY_ID:
+        required: false
+        description: App Store Connect API key ID
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: false
+        description: App Store Connect issuer ID
+      GIT_DEPENDENCY_SSH_KEY:
+        required: false
+        description: Deploy key for private Git dependencies
+      GIT_DEPENDENCY_TOKEN:
+        required: false
+        description: Token for private Git dependencies
 
 env:
   DISTRIBUTION_CONFIG: ${{ inputs.config-path }}

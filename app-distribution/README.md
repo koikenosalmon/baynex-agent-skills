@@ -44,6 +44,10 @@ Run log または Summary の表で WIF、Apple の 3 secret、Team ID、bundle 
 
 CI に署名済み Android APK が必要な場合は、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` を GitHub Actions Secrets に設定し、Gradle で `android/key.properties` を読むようにします。Apple 鍵は共有プロジェクト `baynex-shared` の Secret Manager から読み、CI の一時ファイルは 0600 で作成し終了時に消します。
 
+## 別の組織から呼ぶとき
+
+`secrets: inherit` は同じ組織（または Enterprise）内の呼び出しでしか secrets を渡しません。キットの所有者（`koikenosalmon`）と異なるアカウントや組織のリポジトリから呼ぶと、reusable workflow 側の `secrets.*` がすべて空になります。その場合は `caller-app-distribution-cross-owner.yml` と `caller-app-distribution-check-cross-owner.yml` をコピーしてください。各 secret を `NAME: ${{ secrets.NAME }}` で明示的に渡します。キットは使う secret を `on.workflow_call.secrets` に宣言しているため、同じ組織の caller は従来どおり `secrets: inherit` を使えます。キットに secret が増えたときは、別の組織の caller のマッピングにも追加します。
+
 ## Apple アカウントを追加・変更
 
 ```sh

@@ -1,0 +1,31 @@
+# Use this variant when the calling repository is owned by a different account or organization than koikenosalmon.
+# Inheriting secrets does not work across owners, so every secret is passed explicitly.
+name: App Distribution Check
+on:
+  workflow_dispatch:
+    inputs:
+      ensure_bundle_ids:
+        description: Register missing iOS bundle IDs
+        type: boolean
+        default: true
+      register_devices:
+        description: Register Firebase tester devices with Apple
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  check:
+    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution-check.yml@v1
+    with:
+      config-path: distribution/apps.json
+      kit-ref: v1
+      ensure_bundle_ids: ${{ inputs.ensure_bundle_ids }}
+      register_devices: ${{ inputs.register_devices }}
+    secrets:
+      APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      GIT_DEPENDENCY_SSH_KEY: ${{ secrets.GIT_DEPENDENCY_SSH_KEY }}
+      GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}

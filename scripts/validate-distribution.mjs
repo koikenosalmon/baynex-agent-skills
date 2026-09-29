@@ -75,6 +75,12 @@ export async function validateKitLayout(kitRoot = new URL('../app-distribution/'
     assert(!/--testers\b|--groups\b/.test(workflow), `${file}: uploads must leave tester groups to Baynex`);
     const caller = await readFile(new URL(`templates/caller-${file}`, kitRoot), 'utf8');
     assert(caller.includes('id-token: write') && caller.includes(`workflows/${file}@v1`), `${file}: caller template invalid`);
+    const referenced = [...new Set([...workflow.matchAll(/\bsecrets\.([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]))].sort();
+    const declared = [...workflow.matchAll(/^ {6}([A-Z][A-Z0-9_]*):\n {8}required: false$/gm)].map((m) => m[1]).sort();
+    assert(referenced.length > 0 && referenced.join() === declared.join(), `${file}: declared workflow_call secrets must equal referenced secrets`);
+    const crossOwner = await readFile(new URL(`templates/caller-${file.replace(/\.yml$/, '')}-cross-owner.yml`, kitRoot), 'utf8');
+    assert(!crossOwner.includes('secrets: inherit') && crossOwner.includes(`workflows/${file}@v1`), `${file}: cross-owner template invalid`);
+    for (const name of declared) assert(crossOwner.includes(`${name}: \${{ secrets.${name} }}`), `${file}: cross-owner template must pass ${name}`);
   }
 }
 await validateKitLayout();
