@@ -354,7 +354,9 @@ jobs:
             security create-keychain -p "$keychain_password" "$keychain"
             security set-keychain-settings -lut 3600 "$keychain"
             security unlock-keychain -p "$keychain_password" "$keychain"
-            security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P '' -T /usr/bin/codesign -T /usr/bin/security
+            p12_password=""
+            if [[ -f "$RUNNER_TEMP/apple-account/distribution.p12.password" ]]; then p12_password="$(cat "$RUNNER_TEMP/apple-account/distribution.p12.password")"; fi
+            security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P "$p12_password" -T /usr/bin/codesign -T /usr/bin/security
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
             security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
             echo "署名: Secret Manager の配布証明書を使用"

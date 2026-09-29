@@ -120,3 +120,34 @@ test('配布証明書の中身はログに出さない', async () => {
     assert.ok(!printed.join('\n').includes('secret-key-material'), '秘密鍵がログに出ている');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+// macOS の security は空パスワードの PKCS12 を取り込めない（MAC verification failed）。
+// 証明書にはパスワードが要り、それも秘密なので同じ経路で運ぶ。
+test('配布証明書のパスワードも取りに行き、読めない権限で書き出す', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'kit-pw-'));
+  try {
+    const path = join(directory, 'apps.json');
+    await writeFile(path, JSON.stringify({ appleAccounts: { example: { secretProject: 'baynex-shared', keyP8Secret: 'a', keyIdSecret: 'b', issuerIdSecret: 'c', distributionP12Secret: 'd', distributionP12PasswordSecret: 'e' } } }));
+    const printed = [];
+    await runCli(['load-account', 'example', directory], { DISTRIBUTION_CONFIG: path, GOOGLE_OAUTH_ACCESS_TOKEN: 'token' }, async (url) => {
+      if (url.endsWith('/e/versions/latest:access')) return secret('p12-password');
+      if (url.endsWith('/d/versions/latest:access')) return secret(Buffer.from('p12').toString('base64'));
+      return secret('value');
+    }, (line) => printed.push(line));
+    assert.equal(await readFile(join(directory, 'distribution.p12.password'), 'utf8'), 'p12-password');
+    assert.equal((await stat(join(directory, 'distribution.p12.password'))).mode & 0o777, 0o600);
+    assert.ok(!printed.join('\n').includes('p12-password'), 'パスワードがログに出ている');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('パスワードの設定が無ければパスワードファイルも作らない', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'kit-nopw-'));
+  try {
+    const config = await configWithDistribution(directory);
+    await runCli(['load-account', 'example', directory], { DISTRIBUTION_CONFIG: config, GOOGLE_OAUTH_ACCESS_TOKEN: 'token' }, async (url) => {
+      if (url.includes('distribution-p12')) return secret(Buffer.from('p12').toString('base64'));
+      return secret('value');
+    }, () => {});
+    await assert.rejects(() => stat(join(directory, 'distribution.p12.password')));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
