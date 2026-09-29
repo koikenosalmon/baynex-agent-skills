@@ -359,7 +359,9 @@ jobs:
             security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P "$p12_password" -T /usr/bin/codesign -T /usr/bin/security
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
             security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-            echo "署名: Secret Manager の配布証明書を使用"
+            profile_json=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs" install-profile "$APP_IOS_BUNDLE_ID")
+            profile_name=$(printf '%s' "$profile_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+            echo "署名: Secret Manager の配布証明書と API のプロファイルを使用"
           else
             echo "署名: 配布証明書の設定が無いため cloud signing"
           fi
@@ -367,11 +369,20 @@ jobs:
           major=$(xcodebuild -version | awk '/^Xcode / {split($2,a,"."); print a[1]}')
           method=ad-hoc
           if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= 16 )); then method=release-testing; fi
-          TEAM_ID="$TEAM_ID" EXPORT_METHOD="$method" python3 - <<'PYPLIST'
+          TEAM_ID="$TEAM_ID" EXPORT_METHOD="$method" PROFILE_NAME="${profile_name:-}" BUNDLE_ID="$APP_IOS_BUNDLE_ID" python3 - <<'PYPLIST'
           import os, plistlib
+          profile = os.environ.get('PROFILE_NAME') or ''
+          options = {'method': os.environ['EXPORT_METHOD'], 'teamID': os.environ['TEAM_ID']}
+          # Without a profile of our own there is nothing to name, so leave Xcode to
+          # manage signing exactly as before.
+          if profile:
+              options['signingStyle'] = 'manual'
+              options['provisioningProfiles'] = {os.environ['BUNDLE_ID']: profile}
+              options['signingCertificate'] = 'Apple Distribution'
+          else:
+              options['signingStyle'] = 'automatic'
           with open(os.environ['RUNNER_TEMP'] + '/ExportOptions.plist', 'wb') as output:
-              plistlib.dump({'method': os.environ['EXPORT_METHOD'], 'signingStyle': 'automatic',
-                             'teamID': os.environ['TEAM_ID']}, output)
+              plistlib.dump(options, output)
           PYPLIST
           key_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-key-id")
           issuer_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-issuer-id")
