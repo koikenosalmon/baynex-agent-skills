@@ -53,6 +53,25 @@ node ../baynex-agent-skills/app-distribution/grant-apple-account.mjs --slug anot
 
 `add-apple-account.mjs` は 3 件の空 secret を作り、所有者が値を登録する console link を表示します。`grant-apple-account.mjs` は対象 CI サービスアカウントに各 secret の読み取り権限を付けます。別の共有プロジェクトなら両コマンドに `--shared-project` を指定してください。`apps.json` の `appleAccounts` に新しい slug と 3 secret 名を追加し、切り替えるアプリの `appleAccount` をその slug に変更します。再度 check workflow を実行します。
 
+## 非公開の Git 依存
+
+アプリの `pubspec.yaml` が別の非公開 GitHub リポジトリを `git:` 依存にしていると、呼び出し元の `GITHUB_TOKEN` では読めず `flutter pub get` が失敗します。`distribution/apps.json` の最上位に、その依存リポジトリを `owner/repo` の配列で指定します（任意、最大 20 件）。
+
+```json
+{ "privateGitDependencies": ["OTERA-Co-Ltd/otera-packages"] }
+```
+
+認証情報は Actions Secrets に登録します（caller の `secrets: inherit` で渡ります）。両方ある場合は SSH 鍵を使います。
+
+| Secret | 内容 |
+| --- | --- |
+| `GIT_DEPENDENCY_SSH_KEY` | 依存リポジトリの Deploy key（パスフレーズなしの秘密鍵）。ssh-agent に読み込み、github.com は GitHub 公開のホスト鍵で検証します。 |
+| `GIT_DEPENDENCY_TOKEN` | 依存リポジトリの Contents: Read を持つトークン（fine-grained PAT または GitHub App のトークン）。 |
+
+Android / iOS の `flutter pub get` の前に設定し、同じジョブの `flutter build` でも有効です。書き換えは `privateGitDependencies` に列挙したリポジトリの `https://github.com/<owner>/<repo>` だけが対象で、`pubspec.yaml` と同じ表記で書いてください。git の設定は `$RUNNER_TEMP` の 0600 ファイルに置き、`GIT_CONFIG_COUNT` の環境変数で読み込むだけで、グローバルの git 設定は変更しません。ssh-agent、鍵、設定ファイルはジョブ終了時に必ず削除します。`privateGitDependencies` が空なら何もしません。値がどちらもない場合は Summary に設定のお願いを表示し、`flutter pub get` は従来どおり失敗します。`app-distribution-check.yml` の Summary で設定の有無（値は表示しません）を確認できます。
+
+最小権限のために、Deploy key は依存リポジトリごとに作り、書き込み権限なし（read-only）にします。トークンを使う場合は fine-grained PAT で対象を依存リポジトリだけに絞り、Repository permissions は Contents: Read-only のみにして、有効期限を設定してください。Deploy key は 1 リポジトリに 1 つしか登録できません。複数の依存リポジトリがあるときはトークンが扱いやすいです。
+
 ## 問題があるとき
 
 | 症状 | 対処 |
@@ -62,6 +81,7 @@ node ../baynex-agent-skills/app-distribution/grant-apple-account.mjs --slug anot
 | Apple secret が空または読めない | 所有者に console で新しいバージョンを登録してもらい、`secretAccessor` を確認します。 |
 | `Cloud billing quota exceeded` | GCP プロジェクト作成時の課金枠です。所有者に枠の解消を依頼し、勝手に別プロジェクトへ変更しません。 |
 | `flavor` / `target` が `TODO` | アプリチームに実際の Flutter 設定を確認します。 |
+| `flutter pub get` が `git clone ... exit 128` で失敗 | 非公開の Git 依存です。上の「非公開の Git 依存」を設定します。 |
 | Baynex にリリースが出ない | Firebase リリースとリリースノート末尾の `[baynex]`、40 桁の commit を確認します。 |
 
 終了後は `gcloud auth revoke` を実行します。トークンや Apple キーはリポジトリやチャットに置きません。キットの YAML は [actionlint](https://github.com/rhysd/actionlint) で検証できます: `actionlint .github/workflows/app-distribution*.yml app-distribution/templates/*.yml`。

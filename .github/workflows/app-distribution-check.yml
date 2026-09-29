@@ -65,6 +65,8 @@ jobs:
           WIF_SERVICE_ACCOUNT: ${{ steps.config.outputs.wif_service_account }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           AUTH_OUTCOME: ${{ steps.auth.outcome }}
+          GIT_DEPENDENCY_SSH_KEY_SET: ${{ secrets.GIT_DEPENDENCY_SSH_KEY != '' }}
+          GIT_DEPENDENCY_TOKEN_SET: ${{ secrets.GIT_DEPENDENCY_TOKEN != '' }}
           ENSURE_BUNDLE_IDS: ${{ inputs.ensure_bundle_ids }}
           REGISTER_DEVICES: ${{ inputs.register_devices }}
         run: node .baynex-app-distribution-kit/app-distribution/scripts/distribution-check.mjs
