@@ -59,3 +59,10 @@ test('appleAccount may be absent and the product id can come from Baynex', () =>
   assert.equal(values.PRODUCT_ID, 'prod_9');
   assert.equal(appEnvironment({ ...rest, apps: [app], baynex: { productId: 'prod_9', apple: { available: true } } }, 0, { PRODUCT_ID_OVERRIDE: 'override' }, '/nonexistent').PRODUCT_ID, 'override');
 });
+
+// 署名でプロファイルを引くには bundle identifier が要る。設定にはあるのに
+// ビルドへ渡っていなかった。
+test('iOS の bundle identifier をビルドへ渡す', () => {
+  const values = appEnvironment({ ...config, apps: [{ ...config.apps[0], iosBundleId: 'com.example.app' }] }, 0);
+  assert.equal(values.APP_IOS_BUNDLE_ID, 'com.example.app');
+});

@@ -25,6 +25,7 @@ export function appEnvironment(config, index, env = {}, productConfigPath = 'bay
     APP_DISPLAY_NAME: app.displayName,
     APP_FLAVOR: app.flavor ?? '',
     APP_TARGET: app.target ?? '',
+    APP_IOS_BUNDLE_ID: app.iosBundleId ?? '',
     APP_APPLE_ACCOUNT: app.appleAccount ?? '',
     APP_APPLE_TEAM_ID: app.appleTeamId ?? '',
     FIREBASE_APP_ID_IOS: app.firebaseAppIds?.ios ?? '',
