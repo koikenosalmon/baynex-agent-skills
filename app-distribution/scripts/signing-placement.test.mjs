@@ -32,3 +32,20 @@ test('配布証明書の中身をログに出さない', () => {
   assert.ok(!/echo .*distribution\.p12"/.test(workflow), 'p12 の中身を出している');
   assert.ok(!workflow.includes('cat "$RUNNER_TEMP/apple-account/distribution.p12"'), 'p12 を表示している');
 });
+
+// install-profile は App Store Connect を叩くので、鍵が env に無いと
+// 署名の判断に入る前に落ちる。一度それで一往復した。
+test('iOS のビルドに App Store Connect の鍵が渡っている', () => {
+  const ipa = at('Build cloud-signed IPA');
+  const run = lines.findIndex((line, index) => index > ipa && line.trim() === 'run: |');
+  const block = lines.slice(ipa, run).join('\n');
+  for (const name of ['APP_STORE_CONNECT_KEY_P8_FILE', 'APP_STORE_CONNECT_KEY_ID_FILE', 'APP_STORE_CONNECT_ISSUER_ID_FILE']) {
+    assert.ok(block.includes(name), `${name} が iOS のビルドに渡っていない`);
+  }
+});
+
+test('プロファイルの取得には bundle identifier を渡す', () => {
+  const command = lines.find((line) => line.includes('install-profile "$'));
+  assert.ok(command, 'install-profile の呼び出しが無い');
+  assert.ok(command.includes('$APP_IOS_BUNDLE_ID'), 'bundle identifier を渡していない');
+});

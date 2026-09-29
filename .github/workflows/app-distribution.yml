@@ -339,6 +339,11 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           BRANCH: ${{ github.ref_name }}
           TEAM_ID: ${{ steps.prepare.outputs.team_id }}
+          # install-profile talks to App Store Connect, so it needs the same key the
+          # earlier steps used; without it the build stops before it can sign.
+          APP_STORE_CONNECT_ISSUER_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-issuer-id
+          APP_STORE_CONNECT_KEY_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-key-id
+          APP_STORE_CONNECT_KEY_P8_FILE: ${{ runner.temp }}/apple-account/app-store-connect.p8
         run: |
           set -euo pipefail
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
