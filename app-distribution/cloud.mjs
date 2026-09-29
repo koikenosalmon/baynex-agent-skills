@@ -10,7 +10,10 @@ export function parseArgs(args, options) {
     const key = args[i];
     if (!Object.hasOwn(options, key)) throw new Error(`不明な引数: ${key}`);
     if (options[key] === 'boolean') result[key.slice(2)] = true;
-    else if (i + 1 < args.length && !args[i + 1].startsWith('--')) result[key.slice(2)] = args[++i];
+    else if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+      if (options[key] === 'multi') (result[key.slice(2)] ||= []).push(args[++i]);
+      else result[key.slice(2)] = args[++i];
+    }
     else throw new Error(`${key} の値がありません`);
   }
   return result;

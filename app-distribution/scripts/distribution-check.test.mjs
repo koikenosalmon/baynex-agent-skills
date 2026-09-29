@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
-import { runCheck, distributionNotStarted } from './distribution-check.mjs';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runCheck, distributionNotStarted, findInheritingCallers, findSecretCollisions } from './distribution-check.mjs';
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const keyP8 = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -64,7 +68,8 @@ test('check starts apps on releases 404 and reports probe failure with console f
 });
 
 test('check reports private Git dependency credentials by presence only', async () => {
-  const run = (config, env) => runCheck({ config: { appleAccounts: accounts, apps, ...config }, env: { AUTH_OUTCOME: 'failure', ...env }, print: () => {}, fetch: async () => response({}, 404) });
+  const spawn = () => ({ status: 0 });
+  const run = (config, env) => runCheck({ config: { appleAccounts: accounts, apps, ...config }, env: { AUTH_OUTCOME: 'failure', ...env }, print: () => {}, spawn, fetch: async () => response({}, 404) });
   const none = await run({}, {});
   assert.ok(!none.summary.includes('非公開 Git 依存'));
   const missing = await run({ privateGitDependencies: ['owner/private-repo'] }, {});
@@ -82,4 +87,114 @@ test('check reports the pinned Flutter version and rejects a malformed one', asy
   assert.ok(!(await run({})).summary.includes('Flutter バージョン'));
   assert.match((await run({ flutterVersion: '3.41.9' })).summary, /Flutter バージョン \| ✅ \| CI は 3\.41\.9 に固定/);
   await assert.rejects(() => run({ flutterVersion: 'stable' }), /flutterVersion/);
+});
+
+const oneApp = [apps[0]];
+const oneAccount = { example: accounts.example };
+function fullFetch({ usersStatus = 200, buildVersions = [] } = {}) {
+  return async (url, options) => {
+    const address = String(url);
+    if (address.includes('secretmanager.googleapis.com')) return response({ payload: { data: Buffer.from(values[address.split('/')[7]]).toString('base64') } });
+    if (address.includes('/v1/users')) return response({ data: [] }, usersStatus);
+    if (address.includes('api.appstoreconnect.apple.com')) {
+      if (address.includes('limit=1')) return response({ data: [] });
+      return response({ data: [{ attributes: { identifier: 'com.example.example', seedId: 'ABCDE12345' } }] });
+    }
+    if (address.includes('/releases?')) return response({ releases: buildVersions.map((buildVersion) => ({ displayVersion: '1.0.0', buildVersion: String(buildVersion) })) });
+    if (address.includes('testers:getTesterUdids')) return response({ testerUdids: [] });
+    throw new Error(`Unexpected URL: ${address}`);
+  };
+}
+const googleEnv = { WIF_PROVIDER: 'provider', WIF_SERVICE_ACCOUNT: 'service-account', AUTH_OUTCOME: 'success', GOOGLE_OAUTH_ACCESS_TOKEN: 'token' };
+const runFull = (options, env = {}, config = {}) => runCheck({ config: { appleAccounts: oneAccount, apps: oneApp, ...config }, env: { ...googleEnv, ...env }, print: () => {}, fetch: fullFetch(options) });
+
+test('check reports which declared secrets arrived, by presence only', async () => {
+  const result = await runCheck({ config: { appleAccounts: accounts, apps }, env: { AUTH_OUTCOME: 'failure', ANDROID_KEY_ALIAS: 'upload-alias-value', GIT_DEPENDENCY_TOKEN_SET: 'true' }, print: () => {}, fetch: async () => response({}, 404) });
+  assert.match(result.summary, /GitHub Secrets \| ANDROID_KEY_ALIAS \| ✅/);
+  assert.match(result.summary, /GitHub Secrets \| GIT_DEPENDENCY_TOKEN \| ✅/);
+  assert.match(result.summary, /GitHub Secrets \| APP_STORE_CONNECT_KEY_P8 \| ⚠️ \| 受信していません/);
+  assert.ok(!result.summary.includes('upload-alias-value'));
+});
+
+test('check flags secrets: inherit only when the caller owner differs from the kit owner', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'caller-workflows-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'app-distribution.yml'), 'jobs:\n  distribute:\n    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution.yml@v1\n    with:\n      kit-ref: v1\n    secrets: inherit\n');
+  await writeFile(join(dir, 'other.yaml'), 'jobs:\n  a:\n    uses: someone/else/.github/workflows/x.yml@v1\n    secrets: inherit\n  b:\n    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution-check.yml@v1\n    secrets:\n      A: ${{ secrets.A }}\n');
+  await writeFile(join(dir, 'commented.yml'), 'jobs:\n  a:\n    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution.yml@v1\n    # secrets: inherit\n');
+  assert.deepEqual(await findInheritingCallers(dir), ['app-distribution.yml']);
+  const run = (env) => runCheck({ config: { appleAccounts: accounts, apps }, env: { AUTH_OUTCOME: 'failure', ...env }, workflowsDir: dir, print: () => {}, fetch: async () => response({}, 404) });
+  const cross = await run({ CALLER_OWNER: 'OTERA-Co-Ltd' });
+  assert.equal(cross.failed, true);
+  assert.match(cross.summary, /Caller \| app-distribution\.yml \| ❌ .*secrets: inherit.*cross-owner/);
+  assert.ok(!/Caller \| (other|commented)/.test(cross.summary));
+  const same = await run({ CALLER_OWNER: 'KoikenoSalmon' });
+  assert.ok(!same.summary.includes('| Caller |'));
+  assert.deepEqual(await findInheritingCallers(join(dir, 'missing')), []);
+  await rm(join(dir, 'app-distribution.yml'));
+  assert.match((await run({ CALLER_OWNER: 'OTERA-Co-Ltd' })).summary, /Caller \| 別オーナーからの呼び出し \| ✅/);
+});
+
+test('masked-value collisions name the secret and config key but never the value', async () => {
+  const config = { appleAccounts: accounts, apps: [{ ...apps[0], displayName: 'Zq9top Coach' }, apps[1]], gcp: { uploaderServiceAccount: 'ci@example.iam.gserviceaccount.com' } };
+  assert.deepEqual(findSecretCollisions({ ANDROID_KEY_ALIAS: 'Zq9top', SHORT: 'ab', BLANK: '' }, config), [{ secret: 'ANDROID_KEY_ALIAS', path: 'apps[0].displayName' }]);
+  assert.deepEqual(findSecretCollisions({ A: 'first-line-none\nci@example' }, config), [{ secret: 'A', path: 'gcp.uploaderServiceAccount' }]);
+  const result = await runCheck({ config, env: { AUTH_OUTCOME: 'failure', ANDROID_KEY_ALIAS: 'Zq9top', APP_STORE_CONNECT_KEY_ID: 'ab' }, print: () => {}, fetch: async () => response({}, 404) });
+  assert.equal(result.failed, true);
+  assert.match(result.summary, /Secret マスク \| ANDROID_KEY_ALIAS \| ❌ .*apps\[0\]\.displayName/);
+  assert.ok(!result.summary.includes('Zq9top'));
+  assert.ok(!/Secret マスク \| APP_STORE_CONNECT_KEY_ID/.test(result.summary));
+  const clean = await runCheck({ config: { appleAccounts: accounts, apps }, env: { AUTH_OUTCOME: 'failure', ANDROID_KEY_ALIAS: 'unrelated-alias' }, print: () => {}, fetch: async () => response({}, 404) });
+  assert.match(clean.summary, /Secret マスク \| apps\.json との衝突 \| ✅/);
+});
+
+test('Apple cloud-signing permission maps /v1/users 200, 403 and other statuses', async () => {
+  const ok = await runFull({ usersStatus: 200 });
+  assert.match(ok.summary, /Apple example \| クラウド署名の権限 \| ✅/);
+  const forbidden = await runFull({ usersStatus: 403 });
+  assert.equal(forbidden.failed, true);
+  assert.match(forbidden.summary, /クラウド署名の権限 \| ❌ \| Admin のチームキーが必要/);
+  const unknown = await runFull({ usersStatus: 500 });
+  assert.match(unknown.summary, /クラウド署名の権限 \| ⚠️ \| 判定できません（HTTP 500）/);
+});
+
+test('private dependency rows run git ls-remote with the configured credential and fail on errors', async () => {
+  const calls = [];
+  let keyFile;
+  const spawn = (command, args, options) => {
+    calls.push({ command, args, env: options.env });
+    if (options.env.GIT_SSH_COMMAND) { keyFile = options.env.GIT_SSH_COMMAND.match(/-i '([^']+)'/)[1]; assert.ok(existsSync(keyFile)); }
+    return { status: args[1].includes('broken') ? 128 : 0 };
+  };
+  const run = (env, repos) => runCheck({ config: { appleAccounts: accounts, apps, privateGitDependencies: repos }, env: { AUTH_OUTCOME: 'failure', ...env }, spawn, print: () => {}, fetch: async () => response({}, 404) });
+  const token = await run({ GIT_DEPENDENCY_TOKEN: 'ghp_secretvalue' }, ['org/private', 'org/broken']);
+  assert.match(token.summary, /org\/private 到達性 \| ✅ \| git ls-remote 成功（トークン）/);
+  assert.match(token.summary, /org\/broken 到達性 \| ❌ \| git ls-remote に失敗（終了コード 128）/);
+  assert.equal(token.failed, true);
+  assert.ok(!token.summary.includes('ghp_secretvalue'));
+  for (const call of calls) {
+    assert.equal(call.command, 'git');
+    assert.ok(!call.args.join(' ').includes('ghp_secretvalue'), 'token must not appear in argv');
+    assert.match(call.env.GIT_CONFIG_VALUE_0, /^AUTHORIZATION: basic /);
+  }
+  const ssh = await run({ GIT_DEPENDENCY_SSH_KEY: '-----BEGIN KEY-----\nabc\n-----END KEY-----', GIT_DEPENDENCY_TOKEN: 'ghp_x' }, ['org/private']);
+  assert.match(ssh.summary, /org\/private 到達性 \| ✅ \| git ls-remote 成功（SSH 鍵）/);
+  assert.equal(calls.at(-1).args[1], 'git@github.com:org/private.git');
+  assert.equal(existsSync(keyFile), false);
+  const before = calls.length;
+  const none = await run({}, ['org/private']);
+  assert.equal(calls.length, before);
+  assert.ok(!none.summary.includes('到達性'));
+});
+
+test('build number row warns when run_number + offset is lower than the newest Firebase build', async () => {
+  const low = await runFull({ buildVersions: [7, 50, 12] }, { RUN_NUMBER: '10' });
+  assert.match(low.summary, /ビルド番号 \| example ios \| ⚠️ \| .*= 10、Firebase の最大 50/);
+  assert.equal(low.failed, false);
+  const offset = await runFull({ buildVersions: [7, 50, 12] }, { RUN_NUMBER: '10' }, { buildNumberOffset: 100 });
+  assert.match(offset.summary, /ビルド番号 \| example android \| ✅ \| .*= 110、Firebase の最大 50/);
+  const none = await runFull({ buildVersions: [] }, { RUN_NUMBER: '10' });
+  assert.ok(!none.summary.includes('ビルド番号'));
+  assert.ok(!(await runFull({ buildVersions: [50] })).summary.includes('ビルド番号'));
+  await assert.rejects(() => runFull({}, {}, { buildNumberOffset: -1 }), /buildNumberOffset/);
 });

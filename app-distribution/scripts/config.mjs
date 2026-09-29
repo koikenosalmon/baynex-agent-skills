@@ -33,3 +33,10 @@ export function validateFlutterVersion(config) {
   if (typeof version !== 'string' || version.length > 64 || !flutterVersionPattern.test(version)) throw new Error('apps.json の flutterVersion が不正です（"3.41.9" のようなバージョン文字列）');
   return version;
 }
+
+export function validateBuildNumberOffset(config) {
+  const offset = config?.buildNumberOffset;
+  if (offset === undefined) return 0;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000_000) throw new Error('apps.json の buildNumberOffset が不正です（0 以上の整数）');
+  return offset;
+}

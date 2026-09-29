@@ -1,32 +1,109 @@
 #!/usr/bin/env node
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { accountNames, ensureResource, gcloud, parseArgs, projectPattern, report, slugPattern } from './cloud.mjs';
 import { grantAppleAccount } from './grant-apple-account.mjs';
 import { ensureStarted } from './scripts/firebase-activate.mjs';
 import { validateApps } from './scripts/app-store-connect.mjs';
+import { defaultRun, detectPrivateDependencies, mergeDependencies, provisionDependencyCredential } from './private-dependencies.mjs';
+
+const kitOwner = 'koikenosalmon';
 
 const apis = ['iam.googleapis.com', 'iamcredentials.googleapis.com', 'sts.googleapis.com', 'firebaseappdistribution.googleapis.com', 'firebase.googleapis.com'];
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-export function pairApps(ios, android, oldApps = [], appleAccount, { includeNew = true } = {}) {
+export class PairingError extends Error {
+  constructor(message) { super(message); this.exitCode = 2; }
+}
+
+const pairPattern = /^ios=([^,\s]+),android=([^,\s]+)$/;
+const labelIos = (row) => `"${row.displayName || row.bundleId}" (${row.bundleId}, ${row.appId})`;
+const labelAndroid = (row) => `"${row.displayName || row.packageName}" (${row.packageName}, ${row.appId})`;
+
+export function parsePairSpecs(values = []) {
+  return values.map((value) => {
+    const match = pairPattern.exec(value);
+    if (!match) throw new Error(`--pair の形式が不正です: ${value}（ios=<firebaseAppId>,android=<firebaseAppId>）`);
+    return { ios: match[1], android: match[2] };
+  });
+}
+
+async function promptLine(question) {
+  const { createInterface } = await import('node:readline/promises');
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try { return await readline.question(question); } finally { readline.close(); }
+}
+
+// Pairs Firebase iOS and Android apps. Decided pairs (apps.json, --pair) and unique name matches are used as is;
+// anything else is asked (TTY) or rejected with exit code 2 (non-interactive). It never guesses.
+export async function pairApps(ios, android, oldApps = [], appleAccount, { includeNew = true, pairs = [], interactive = false, ask = promptLine } = {}) {
   const key = (row, platform) => {
     const display = String(row.displayName || '').toLowerCase().replace(/\b(ios|android|dev|qa)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
     const identifier = String(platform === 'ios' ? row.bundleId : row.packageName);
     return { display, suffix: identifier.split('.').at(-1)?.toLowerCase() };
   };
+  const findOld = (i) => oldApps.find((row) => row.firebaseAppIds?.ios === i.appId || row.iosBundleId === i.bundleId);
+  const chosen = new Map();
   const used = new Set();
-  const paired = [];
+  const forced = new Set();
+  const assign = (i, d) => { chosen.set(i.appId, d); used.add(d.appId); };
+  for (const pair of pairs) {
+    const i = ios.find((row) => row.appId === pair.ios), d = android.find((row) => row.appId === pair.android);
+    if (!i || !d) throw new Error(`--pair のアプリ ID が Firebase にありません: ios=${pair.ios},android=${pair.android}`);
+    if (chosen.has(i.appId) || used.has(d.appId)) throw new Error(`--pair が重複しています: ios=${pair.ios},android=${pair.android}`);
+    assign(i, d); forced.add(i.appId);
+  }
   for (const i of ios) {
+    if (chosen.has(i.appId)) continue;
+    const d = android.find((row) => row.appId === findOld(i)?.firebaseAppIds?.android && !used.has(row.appId));
+    if (d) assign(i, d);
+  }
+  const pending = [];
+  for (const i of ios) {
+    if (chosen.has(i.appId)) continue;
     const a = key(i, 'ios');
     let matches = android.filter((d) => !used.has(d.appId) && a.display && key(d, 'android').display === a.display);
     if (matches.length !== 1) matches = android.filter((d) => !used.has(d.appId) && a.suffix && key(d, 'android').suffix === a.suffix);
-    if (matches.length !== 1) { report('⚠️', `${i.displayName || i.bundleId}: Android と一意に対応せず除外`); continue; }
-    const d = matches[0]; used.add(d.appId);
-    const old = oldApps.find((row) => row.firebaseAppIds?.ios === i.appId || row.iosBundleId === i.bundleId);
-    if (!old && !includeNew) { report('⚠️', `${i.displayName || i.bundleId}: 新しい候補です。追加するときは --include-new を付けて再実行してください`); continue; }
-    const suffix = a.suffix?.replace(/[^a-z0-9-]/g, '-') || '';
+    if (matches.length === 1) assign(i, matches[0]);
+    else pending.push(i);
+  }
+  const skipped = new Set();
+  const undecided = [];
+  for (const i of pending) {
+    if (!findOld(i) && !includeNew) report('⚠️', `${i.displayName || i.bundleId}: 新しい候補です。追加するときは --include-new を付けて再実行してください`);
+    else undecided.push(i);
+  }
+  const available = () => android.filter((d) => !used.has(d.appId));
+  const missing = undecided.filter((i) => !available().length);
+  for (const i of missing) report('⚠️', `${labelIos(i)}: 対応する Android アプリがありません`);
+  const ambiguous = undecided.filter((i) => !missing.includes(i));
+  if (ambiguous.length && !interactive) {
+    const example = `--pair ios=${ambiguous[0].appId},android=${available()[0].appId}`;
+    throw new PairingError(['iOS と Android の対応が一意に決まらないため、推測せずに停止しました。',
+      ...ambiguous.flatMap((i) => [`- iOS ${labelIos(i)} の候補:`, ...available().map((d) => `    - Android ${labelAndroid(d)}`)]),
+      `対応を --pair ios=<firebaseAppId>,android=<firebaseAppId> で指定して再実行してください（複数回指定できます）。例: ${example}`].join('\n'));
+  }
+  for (const i of ambiguous) {
+    const candidates = available();
+    if (!candidates.length) { report('⚠️', `${labelIos(i)}: 対応する Android アプリがありません`); skipped.add(i.appId); continue; }
+    console.log(`iOS ${labelIos(i)} に対応する Android アプリを選んでください:`);
+    candidates.forEach((d, index) => console.log(`  ${index + 1}) ${labelAndroid(d)}`));
+    console.log('  s) このアプリは追加しない');
+    for (;;) {
+      const answer = String(await ask(`番号 [1-${candidates.length}/s]: `)).trim().toLowerCase();
+      if (answer === 's') { skipped.add(i.appId); break; }
+      if (/^\d+$/.test(answer) && Number(answer) >= 1 && Number(answer) <= candidates.length) { assign(i, candidates[Number(answer) - 1]); break; }
+      console.log('番号か s を入力してください。');
+    }
+  }
+  const paired = [];
+  for (const i of ios) {
+    const d = chosen.get(i.appId);
+    if (!d || skipped.has(i.appId)) continue;
+    const old = findOld(i);
+    if (!old && !includeNew && !forced.has(i.appId)) { report('⚠️', `${i.displayName || i.bundleId}: 新しい候補です。追加するときは --include-new を付けて再実行してください`); continue; }
+    const suffix = key(i, 'ios').suffix?.replace(/[^a-z0-9-]/g, '-') || '';
     const id = old?.id || (/^[a-z]/.test(suffix) ? suffix : `app-${suffix || paired.length + 1}`);
     paired.push({ id, displayName: old?.displayName || i.displayName || d.displayName || id,
       flavor: old?.flavor || 'TODO', target: old?.target || 'TODO',
@@ -34,7 +111,7 @@ export function pairApps(ios, android, oldApps = [], appleAccount, { includeNew 
       firebaseAppIds: { ios: i.appId, android: d.appId }, appleAccount: old?.appleAccount || appleAccount,
       ...(old?.appleTeamId ? { appleTeamId: old.appleTeamId } : {}) });
   }
-  for (const d of android) if (!used.has(d.appId)) report('⚠️', `${d.displayName || d.packageName}: iOS と対応せず除外`);
+  for (const d of android) if (!used.has(d.appId)) report('⚠️', `${labelAndroid(d)}: iOS と対応せず除外（追加するなら --pair を使います）`);
   return paired;
 }
 
@@ -58,7 +135,7 @@ async function listFirebaseApps(project, platform, token, fetchImpl = fetch) {
   return apps;
 }
 
-export async function bootstrap({ project, repo, appleAccount, short, appDir, out = 'distribution/apps.json', dryRun = false, includeNew = false }, deps = {}) {
+export async function bootstrap({ project, repo, appleAccount, short, appDir, out = 'distribution/apps.json', dryRun = false, includeNew = false, pairs = [] }, deps = {}) {
   if (!projectPattern.test(project || '') || !repoPattern.test(repo || '') || !slugPattern.test(appleAccount || '')) throw new Error('project、repo、apple-account を確認してください');
   short ||= project.replace(/-(dev|prod|staging|qa)$/, '');
   if (!slugPattern.test(short) || short.length > 18) throw new Error('short は 2～18 文字の小文字・数字・ハイフンにしてください');
@@ -97,16 +174,22 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
   try { previous = JSON.parse(await readFile(out, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   appDir ||= previous.appDir || 'native';
   if (!/^[A-Za-z0-9_./-]+$/.test(appDir) || appDir.includes('..')) throw new Error('app-dir が不正です');
-  const apps = pairApps(ios, android, previous.apps, appleAccount, { includeNew: includeNew || !previous.apps?.length });
+  const interactive = deps.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY);
+  const apps = await pairApps(ios, android, previous.apps, appleAccount, { includeNew: includeNew || !previous.apps?.length || pairs.length > 0, pairs, interactive, ...(deps.ask ? { ask: deps.ask } : {}) });
   if (!apps.length) throw new Error('iOS と Android のペアが見つかりません');
   if (new Set(apps.map((app) => app.id)).size !== apps.length) throw new Error('アプリ ID が重複しています。識別子の組を確認してください');
+  const commandRun = deps.run || defaultRun;
+  const detected = await (deps.detectPrivateDependencies || detectPrivateDependencies)({ appRepo: repo, appDir, run: commandRun });
+  const privateGitDependencies = mergeDependencies(previous.privateGitDependencies, detected.repos);
   const config = { appDir, firebaseProject: project, gcp: { workloadIdentityProvider: provider, uploaderServiceAccount: serviceAccount }, apps,
     appleAccounts: { ...(previous.appleAccounts || {}), [appleAccount]: accountNames(appleAccount) },
-    ...(previous.privateGitDependencies === undefined ? {} : { privateGitDependencies: previous.privateGitDependencies }),
-    ...(previous.flutterVersion === undefined ? {} : { flutterVersion: previous.flutterVersion }) };
+    ...(previous.privateGitDependencies === undefined && !privateGitDependencies.length ? {} : { privateGitDependencies }),
+    ...(previous.flutterVersion === undefined ? {} : { flutterVersion: previous.flutterVersion }),
+    ...(previous.buildNumberOffset === undefined ? {} : { buildNumberOffset: previous.buildNumberOffset }) };
   validateApps(config);
   if (dryRun) report('⚠️', `${out}: ${apps.length} アプリを書き込み予定`);
   else { await mkdir(dirname(out), { recursive: true }); await writeFile(out, `${JSON.stringify(config, null, 2)}\n`, { flag: 'w' }); report('✅', `${out}: ${apps.length} アプリを書き込みました`); }
+  provisionDependencyCredential({ appRepo: repo, repos: privateGitDependencies, dryRun, run: commandRun, ...(deps.makeTempDir ? { makeTempDir: deps.makeTempDir } : {}) });
   for (const app of apps) for (const platform of ['ios', 'android']) {
     if (dryRun) { report('⚠️', `${app.id} ${platform}: App Distribution の開始を確認予定`); continue; }
     const state = await ensureStarted({ appId: app.firebaseAppIds[platform], token,
@@ -115,11 +198,19 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
   }
   if (apps.some((app) => app.flavor === 'TODO' || app.target === 'TODO')) report('⚠️', 'apps.json の flavor / target の TODO をアプリチームと確認してください。');
   report('⚠️', 'IAM の反映には約 5 分かかることがあります。');
-  for (const [template, destination] of [
-    ['caller-app-distribution.yml', '.github/workflows/app-distribution.yml'],
-    ['caller-app-distribution-check.yml', '.github/workflows/app-distribution-check.yml'],
-  ]) {
-    console.log(`✅ 追加する caller workflow: ${destination}\n${await readFile(new URL(`templates/${template}`, import.meta.url), 'utf8')}`);
+  const crossOwner = repo.split('/')[0].toLowerCase() !== kitOwner;
+  const callerDir = deps.callerDir || '.github/workflows';
+  for (const name of ['app-distribution', 'app-distribution-check']) {
+    const template = `caller-${name}${crossOwner ? '-cross-owner' : ''}.yml`;
+    const content = await readFile(new URL(`templates/${template}`, import.meta.url), 'utf8');
+    const destination = join(callerDir, `${name}.yml`);
+    if (!crossOwner) { console.log(`✅ 追加する caller workflow: ${destination}\n${content}`); continue; }
+    let existing = null;
+    try { existing = await readFile(destination, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (existing === content) report('✅', `${destination}: 別オーナー用 caller は最新です`);
+    else if (existing !== null && !/^\s*secrets:\s*inherit\s*(?:#.*)?$/m.test(existing)) report('⚠️', `${destination}: 既存の caller を残しました。別オーナーのため secrets を ${template} のように明示してください`);
+    else if (dryRun) report('⚠️', `${destination}: 別オーナー用 caller（${template}）を書き込み予定`);
+    else { await mkdir(dirname(destination), { recursive: true }); await writeFile(destination, content); report('✅', `${destination}: 別オーナー用 caller（${template}）を書き込みました`); }
   }
   report('✅', '確認コマンド: gh workflow run app-distribution-check.yml --ref qa -f ensure_bundle_ids=true -f register_devices=false');
   return config;
@@ -127,7 +218,7 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const args = parseArgs(process.argv.slice(2), { '--project': 'string', '--repo': 'string', '--apple-account': 'string', '--short': 'string', '--app-dir': 'string', '--out': 'string', '--dry-run': 'boolean', '--include-new': 'boolean' });
-    await bootstrap({ project: args.project, repo: args.repo, appleAccount: args['apple-account'], short: args.short, appDir: args['app-dir'], out: args.out, dryRun: args['dry-run'], includeNew: args['include-new'] });
-  } catch (error) { report('❌', error.message); process.exitCode = 1; }
+    const args = parseArgs(process.argv.slice(2), { '--project': 'string', '--repo': 'string', '--apple-account': 'string', '--short': 'string', '--app-dir': 'string', '--out': 'string', '--dry-run': 'boolean', '--include-new': 'boolean', '--pair': 'multi' });
+    await bootstrap({ project: args.project, repo: args.repo, appleAccount: args['apple-account'], short: args.short, appDir: args['app-dir'], out: args.out, dryRun: args['dry-run'], includeNew: args['include-new'], pairs: parsePairSpecs(args.pair) });
+  } catch (error) { report('❌', error.message); process.exitCode = error.exitCode || 1; }
 }
