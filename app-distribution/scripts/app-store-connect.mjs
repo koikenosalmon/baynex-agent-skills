@@ -134,7 +134,7 @@ export async function registerDevices(client, devices) {
 export async function runCli(args, env = process.env, fetchImpl = fetch) {
   ({ args, env } = splitConfigArgs(args, env));
   const [command, argument] = args;
-  if (!['check', 'ensure-bundle-ids', 'register-devices'].includes(command) || (command === 'register-devices' ? !argument || args.length !== 2 : args.length > 2)) throw new Error('使い方: app-store-connect.mjs check|ensure-bundle-ids [app-id]|register-devices <file>');
+  if (!['check', 'ensure-bundle-ids', 'register-devices', 'install-profile'].includes(command) || (['register-devices', 'install-profile'].includes(command) ? !argument || args.length !== 2 : args.length > 2)) throw new Error('使い方: app-store-connect.mjs check|ensure-bundle-ids [app-id]|register-devices <file>|install-profile <bundle-identifier>');
   // Prefer the short-lived ASC token from Baynex; fall back to signing a JWT from the loaded key.
   let client;
   if (env.ACTIONS_ID_TOKEN_REQUEST_URL && env.BAYNEX_ASC_TOKEN !== 'off') {
@@ -143,6 +143,12 @@ export async function runCli(args, env = process.env, fetchImpl = fetch) {
   }
   if (!client) client = await keyClient(env, fetchImpl);
   if (command === 'register-devices') return registerDevices(client, JSON.parse(await readFile(argument, 'utf8')));
+  if (command === 'install-profile') {
+    const { ensureDistributionProfile } = await import('./provisioning-profile.mjs');
+    const certificates = await client.list('/v1/certificates?limit=200&filter%5BcertificateType%5D=DISTRIBUTION');
+    if (!certificates.length) throw new Error('配布証明書がありません');
+    return ensureDistributionProfile(client, { bundleIdentifier: argument, certificateId: certificates[0].id });
+  }
   const config = await readConfig(env);
   const apps = validateApps(config);
   const selected = argument ? apps.filter((app) => app.id === argument) : apps;

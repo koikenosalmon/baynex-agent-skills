@@ -166,6 +166,8 @@ test('ExportOptions escape values and reject bad input', () => {
 
 test('secret location comes from the account, an override, or the default name', () => {
   assert.deepEqual(resolveSecret({ appleAccounts: { example: { secretProject: 'proj-shared-1', distP12Secret: 'custom' } } }, {}, 'example'), { project: 'proj-shared-1', name: 'custom' });
+  // mamomiru: appleAccount "ci-cd" with secretProject baynex-shared and no extra variables
+  assert.deepEqual(resolveSecret({ appleAccounts: { 'ci-cd': { secretProject: 'baynex-shared', keyP8Secret: 'a', keyIdSecret: 'b', issuerIdSecret: 'c' } } }, {}, 'ci-cd'), { project: 'baynex-shared', name: 'apple-ci-cd-dist-p12' });
   assert.deepEqual(resolveSecret(undefined, {}, 'example'), { project: 'baynex-shared', name: 'apple-example-dist-p12' });
   assert.deepEqual(resolveSecret(undefined, { IOS_SIGNING_SECRET_PROJECT: 'p-abcde', IOS_SIGNING_SECRET_NAME: 'n' }, ''), { project: 'p-abcde', name: 'n' });
   assert.throws(() => resolveSecret(undefined, {}, ''), /保存先が決まりません/);

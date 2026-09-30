@@ -9,12 +9,24 @@ const projectPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const secretPattern = /^[A-Za-z0-9_-]{1,255}$/;
 const MAX_BYTES = 1024 * 1024;
 const fields = { keyP8: 'keyP8Secret', keyId: 'keyIdSecret', issuerId: 'issuerIdSecret' };
+// Cloud signing assumes Xcode already holds the private key of a certificate it
+// made itself. A fresh runner never does, so it tries to mint another one and is
+// refused. Carrying the distribution certificate and its key through the same
+// Secret Manager path as the API key is what lets the runner sign at all.
+const DISTRIBUTION_FIELD = 'distributionP12Secret';
+// macOS refuses a PKCS12 with no password, so the certificate needs one and the
+// password is as secret as the certificate is.
+const DISTRIBUTION_PASSWORD_FIELD = 'distributionP12PasswordSecret';
 
 export function validateAppleAccounts(config) {
   const accounts = config?.appleAccounts;
   if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts) || !Object.keys(accounts).length) throw new Error('apps.json の appleAccounts が不正です');
   for (const [slug, account] of Object.entries(accounts)) {
     if (!slugPattern.test(slug) || !account || typeof account !== 'object' || Array.isArray(account) || !projectPattern.test(account.secretProject || '') || Object.values(fields).some((field) => !secretPattern.test(account[field] || ''))) throw new Error(`apps.json の Apple アカウント設定が不正です: ${slug}`);
+    // 配布証明書は任意。設定した以上は名前が正しいことを求める。
+    for (const field of [DISTRIBUTION_FIELD, DISTRIBUTION_PASSWORD_FIELD]) {
+      if (account[field] !== undefined && !secretPattern.test(account[field] || '')) throw new Error(`apps.json の Apple アカウント設定が不正です: ${slug}`);
+    }
   }
   return accounts;
 }
@@ -92,6 +104,8 @@ export async function addSecretVersion({ project, name, token, value, fetch: fet
 export async function loadAccount(account, token, fetchImpl = fetch) {
   const values = {};
   for (const [key, field] of Object.entries(fields)) values[key] = await accessSecret({ project: account.secretProject, name: account[field], token, fetch: fetchImpl });
+  if (account[DISTRIBUTION_FIELD]) values.distributionP12 = await accessSecret({ project: account.secretProject, name: account[DISTRIBUTION_FIELD], token, fetch: fetchImpl });
+  if (account[DISTRIBUTION_PASSWORD_FIELD]) values.distributionP12Password = await accessSecret({ project: account.secretProject, name: account[DISTRIBUTION_PASSWORD_FIELD], token, fetch: fetchImpl });
   return values;
 }
 
@@ -110,6 +124,12 @@ export async function writeAccountFiles({ config, slug, directory, token, fallba
   await mkdir(directory, { recursive: true, mode: 0o700 });
   for (const [key, filename] of Object.entries({ keyP8: 'app-store-connect.p8', keyId: 'app-store-connect-key-id', issuerId: 'app-store-connect-issuer-id' })) {
     await writeFile(join(directory, filename), values[key], { mode: 0o600, flag: 'w' });
+  }
+  if (typeof values.distributionP12 === 'string' && values.distributionP12) {
+    await writeFile(join(directory, 'distribution.p12'), Buffer.from(values.distributionP12, 'base64'), { mode: 0o600, flag: 'w' });
+  }
+  if (typeof values.distributionP12Password === 'string' && values.distributionP12Password) {
+    await writeFile(join(directory, 'distribution.p12.password'), values.distributionP12Password, { mode: 0o600, flag: 'w' });
   }
   onSource?.(source);
   print(`::add-mask::${values.keyId}`);
