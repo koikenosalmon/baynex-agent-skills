@@ -239,3 +239,24 @@ test('a Baynex asc-token failure (429) falls back to the next key route', async 
   const { result } = await baynexRun(() => jsonResponse({ error: 'ci_rate_limited' }, 429), { BAYNEX_CI_STATUS: 'ok', BAYNEX_CI_MODE: 'repo' });
   assert.match(result.summary, /鍵の取得経路 \| Apple \| ⚠️ \| 取得できる経路がありません/);
 });
+
+test('check warns when many Apple Development certificates were created via the API', async () => {
+  const run = (certificates) => runCheck({
+    config: { appleAccounts: { example: accounts.example }, apps: [apps[0]] },
+    env: { AUTH_OUTCOME: 'success', GOOGLE_OAUTH_ACCESS_TOKEN: 'token', WIF_PROVIDER: 'p', WIF_SERVICE_ACCOUNT: 's' },
+    print: () => {},
+    fetch: async (url) => {
+      const address = String(url);
+      if (address.includes('secretmanager.googleapis.com')) return response({ payload: { data: Buffer.from(values[address.split('/')[7]]).toString('base64') } });
+      if (address.includes('/v1/certificates')) return response({ data: certificates });
+      if (address.includes('api.appstoreconnect.apple.com')) return response({ data: address.includes('limit=1') ? [] : [{ attributes: { identifier: 'com.example.example', seedId: 'ABCDE12345' } }] });
+      return response({}, 404);
+    },
+  });
+  const made = (count) => Array.from({ length: count }, () => ({ attributes: { certificateType: 'IOS_DEVELOPMENT', name: 'Created via API' } }));
+  const few = await run(made(4));
+  assert.match(few.summary, /API 作成の Development 証明書 \| ✅ \| 4 件/);
+  const many = await run(made(5));
+  assert.match(many.summary, /API 作成の Development 証明書 \| ⚠️ \| .*5 件/);
+  assert.ok(!/API 作成の Development 証明書 \| ❌/.test(many.summary));
+});

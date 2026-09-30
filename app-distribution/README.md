@@ -167,7 +167,12 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 
 ## iOS の署名（cloud signing と手動署名フォールバック）
 
-iOS ジョブは最初に Xcode の cloud signing（`-allowProvisioningUpdates` と App Store Connect API キー）で ad-hoc / release-testing を export します。これが `Cloud signing permission error` / `No signing certificate "iOS Distribution" found` / `No profiles for ... were found` で失敗したときだけ、自動で管理された手動署名に切り替えます（それ以外の失敗ではフォールバックしません）。
+iOS ジョブの署名経路は 2 つです。
+
+- **配布証明書（p12）がある場合（推奨）**: 一時 keychain に配布証明書を入れ、アプリと拡張の各ターゲットの Bundle ID ごとに `IOS_APP_ADHOC` プロファイルを API で取得します。`scripts/ios-project-signing.rb` が CI のチェックアウト上の各ターゲットだけを手動署名（Apple Distribution + ターゲット専用のプロファイル）に書き換え、`-allowProvisioningUpdates` も API キーも渡さずに archive と export を行います。Apple Development 証明書を作る手段が無いため、使い捨て runner で証明書が溜まりません。archive を署名なし（`CODE_SIGNING_ALLOWED=NO`）にしないのは、署名なしの archive には entitlements（`aps-environment` など）が残らず、export の再署名でも復元されないためです。プロファイル指定をコマンドラインの `PROVISIONING_PROFILE_SPECIFIER` にしないのは、Pods を含む全ターゲットに掛かり `does not support provisioning profiles` で失敗するためです（fastlane の `update_code_signing_settings` と同じ考え方です）。
+- **配布証明書が無い場合**: 最初に Xcode の cloud signing（`-allowProvisioningUpdates` と App Store Connect API キー）で ad-hoc / release-testing を export します。cloud signing は runner ごとに Apple Development 証明書を API で新規作成し（秘密鍵は runner と一緒に消えます）、チームの上限に達すると `Choose a certificate to revoke` で archive が失敗します。archive 前に API 作成の Development 証明書が 5 件以上あると警告します。`apps.json` の `distributionP12Secret` を設定して上の経路に移ることを推奨します。この経路で `Cloud signing permission error` / `No signing certificate "iOS Distribution" found` / `No profiles for ... were found` により export が失敗したときだけ、自動で管理された手動署名に切り替えます（それ以外の失敗ではフォールバックしません）。
+
+`distribution-check` は Apple アカウントごとに「API 作成の Development 証明書」の件数を表示し、5 件以上で ⚠️ にします（このツールは証明書を失効させません。不要なものは Apple Developer で手動で失効させてください）。
 
 - `scripts/ios-signing.mjs prepare` が Apple Distribution 証明書を 1 つだけ管理します。秘密鍵と証明書は p12 として Secret Manager の `apple-<slug>-dist-p12`（`appleAccounts.<slug>.distP12Secret` で変更可）に JSON で保存し、Apple 上でまだ有効なら再利用します。保存済みが無い、または Apple 上で失効・期限切れのときだけ新規作成します。証明書は失効させません。
 - 保存できることを先に確認してから証明書を作るため、鍵を失って枠を消費することはありません。書き込み権限が無いときは何も作らずに止まります（`grant-apple-account.mjs` が `secretVersionAdder` を付与します）。
@@ -184,6 +189,7 @@ iOS ジョブは最初に Xcode の cloud signing（`-allowProvisioningUpdates` 
 | Firebase リリース一覧が 404 | bootstrap と workflow が probe upload で自動開始します。失敗時は API と `roles/firebaseappdistro.admin` を確認します。 |
 | GitHub WIF 認証に失敗 | IAM 反映に約 5 分かかることがあります。待って再実行し、repo 条件と `roles/iam.workloadIdentityUser` を確認します。 |
 | check の Baynex CI アクセスが ⚠️ 拒否 | Baynex の製品設定でこのリポジトリ（`repositoryId` / `ownerId`）を登録して有効にします。未登録でも従来の経路で動きます。 |
+| archive が `Choose a certificate to revoke` / `No profiles for ... iOS App Development` で失敗する | API 作成の Development 証明書がチームの上限に達しています。Apple Developer で不要な `Created via API` の Development 証明書を手動で失効させ、`distributionP12Secret` を設定して手動署名の経路に移ります。 |
 | iOS export が cloud signing で失敗する | 自動で手動署名に切り替わります。`apple-<slug>-dist-p12` の書き込み権限（`secretVersionAdder`）と Apple の配布証明書の上限を確認します。 |
 | Apple secret が空または読めない | 所有者に console で新しいバージョンを登録してもらい、`secretAccessor` を確認します。 |
 | `Cloud billing quota exceeded` | GCP プロジェクト作成時の課金枠です。所有者に枠の解消を依頼し、勝手に別プロジェクトへ変更しません。 |

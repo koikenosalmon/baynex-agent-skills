@@ -54,7 +54,7 @@ assert(server?.command === 'node' && server.args?.[0] === './scripts/baynex-mcp-
 assert(server.env_vars?.length === 3, 'MCP config must declare only canonical credential names');
 
 export async function validateKitLayout(kitRoot = new URL('../app-distribution/', import.meta.url), workflowRoot = new URL('../.github/workflows/', import.meta.url)) {
-  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs', 'baynex-oidc.mjs', 'apple-credentials.mjs', 'resolve-config.mjs'];
+  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs', 'baynex-oidc.mjs', 'apple-credentials.mjs', 'resolve-config.mjs', 'development-certificates.mjs'];
   for (const file of scripts) {
     const source = await readFile(new URL(`scripts/${file}`, kitRoot), 'utf8');
     assert(source.length > 0, `${file}: empty kit script`);

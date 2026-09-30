@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createClient, validateApps, bundleStatus, registerDevices } from './app-store-connect.mjs';
 import { fetchAscToken } from './apple-credentials.mjs';
+import { countApiDevelopmentCertificates, developmentCertificateAdvice } from './development-certificates.mjs';
 import { accessSecret } from './secret-manager.mjs';
 import { fetchTesterUdids } from './firebase-udids.mjs';
 import { ensureStarted } from './firebase-activate.mjs';
@@ -185,6 +186,11 @@ export async function runCheck({ config, env = process.env, fetch: fetchImpl = f
       const result = await bundleStatus(client, accountApps, env.ENSURE_BUNDLE_IDS === 'true');
       for (const item of result.bundleIds) row(`Apple ${slug}`, item.bundleId, item.exists ? '✅' : '❌', item.created ? '作成済み' : item.exists ? '存在します' : '未登録');
       row(`Apple ${slug}`, 'Team ID', result.teamId ? '✅' : '❌', result.teamId || '取得できません');
+      try {
+        const certificates = await countApiDevelopmentCertificates(client);
+        if (certificates.warn) row(`Apple ${slug}`, 'API 作成の Development 証明書', '⚠️', developmentCertificateAdvice(certificates));
+        else row(`Apple ${slug}`, 'API 作成の Development 証明書', '✅', `${certificates.api} 件（${certificates.threshold} 件以上で警告）`);
+      } catch (error) { row(`Apple ${slug}`, 'API 作成の Development 証明書', '⚠️', `数えられません（${error.message}）`); }
     } catch (error) { row(`Apple ${slug}`, 'App Store Connect', '❌', error.message); unavailable(); }
   }
 
