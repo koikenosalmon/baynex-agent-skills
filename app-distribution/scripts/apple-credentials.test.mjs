@@ -114,3 +114,61 @@ test('asc-token is fetched with its purpose, masked and validated', async () => 
   const badCloud = harness(() => json({ keyId: 'ABC1234567', issuerId: 'nope', privateKey: 'x' }));
   await assert.rejects(() => fetchCloudSigning(badCloud.args), /cloud-signing/);
 });
+
+// Real scenario: the repo is registered in Baynex CI access (ASC key from Baynex OIDC) while apps.json keeps
+// appleAccount "ci-cd" with an existing distribution certificate. Manual signing must stay selected.
+const ciCd = { secretProject: 'baynex-shared', distributionP12Secret: 'apple-ci-cd-distribution-p12', distributionP12PasswordSecret: 'apple-ci-cd-distribution-p12-password' };
+const ciCdConfig = { appleAccount: 'ci-cd', appleAccounts: { 'ci-cd': ciCd }, apps: [], baynex: { mode: 'repo', apple: { available: true, cloudSigning: true } } };
+const p12Bytes = Buffer.from('fake-p12-bytes');
+
+function ciCdHarness(status = 200) {
+  const requested = [];
+  const { fetch, calls } = fakeFetch(() => json(cloud));
+  const wrapped = async (url, options) => {
+    if (!String(url).includes('secretmanager.googleapis.com')) return fetch(url, options);
+    const name = String(url).split('/')[7];
+    requested.push(name);
+    if (status !== 200) return json({}, status);
+    return json({ payload: { data: Buffer.from(name.endsWith('password') ? 'p12-pass' : p12Bytes.toString('base64')).toString('base64') } });
+  };
+  const out = [];
+  const err = [];
+  return { requested, calls, out, err, args: { config: ciCdConfig, env: { ...oidcEnv, GOOGLE_OAUTH_ACCESS_TOKEN: 'google-token' }, fetch: wrapped, print: (l) => out.push(String(l)), warn: (l) => err.push(String(l)) } };
+}
+
+test('Baynex OIDC key + apps.json distributionP12Secret: the configured p12 is written for manual signing, no dist-p12 secret is touched', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'apple-cred-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const directory = join(dir, 'apple-account');
+  const h = ciCdHarness();
+  assert.equal(await loadAppleCredentials({ slug: 'ci-cd', directory, ...h.args }), 'baynex');
+  assert.equal(await readFile(join(directory, 'app-store-connect-key-id'), 'utf8'), 'ABC1234567');
+  assert.deepEqual(await readFile(join(directory, 'distribution.p12')), p12Bytes);
+  assert.equal(await readFile(join(directory, 'distribution.p12.password'), 'utf8'), 'p12-pass');
+  assert.equal((await stat(join(directory, 'distribution.p12'))).mode & 0o777, 0o600);
+  assert.deepEqual(h.requested, ['apple-ci-cd-distribution-p12', 'apple-ci-cd-distribution-p12-password']);
+  assert.ok(!h.requested.some((name) => name.endsWith('-dist-p12')), 'the managed dist-p12 secret is never read or created');
+});
+
+test('Baynex OIDC key without a configured distribution p12 writes no p12 (cloud signing path) and needs no Secret Manager', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'apple-cred-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const h = ciCdHarness();
+  h.args.config = { ...ciCdConfig, appleAccounts: { 'ci-cd': { secretProject: 'baynex-shared' } } };
+  assert.equal(await loadAppleCredentials({ slug: 'ci-cd', directory: join(dir, 'a'), ...h.args }), 'baynex');
+  await assert.rejects(() => stat(join(dir, 'a', 'distribution.p12')), /ENOENT/);
+  assert.deepEqual(h.requested, []);
+  const none = ciCdHarness();
+  none.args.config = { apps: [] };
+  assert.equal(await loadAppleCredentials({ slug: '', directory: join(dir, 'b'), ...none.args }), 'baynex');
+});
+
+test('a configured distribution p12 that cannot be read stops with a clear message instead of falling back', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'apple-cred-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const denied = ciCdHarness(403);
+  await assert.rejects(() => loadAppleCredentials({ slug: 'ci-cd', directory: join(dir, 'a'), ...denied.args }), /配布証明書を Secret Manager から読めません.*apple-ci-cd-distribution-p12 を読む権限がありません.*自動作成には切り替えません/);
+  const noToken = ciCdHarness();
+  delete noToken.args.env.GOOGLE_OAUTH_ACCESS_TOKEN;
+  await assert.rejects(() => loadAppleCredentials({ slug: 'ci-cd', directory: join(dir, 'b'), ...noToken.args }), /アクセストークンがありません/);
+});

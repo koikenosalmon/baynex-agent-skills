@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClient } from './app-store-connect.mjs';
-import { CLOUD_SIGNING_FAILURE, exportOptionsPlist, parseBundle, prepare, profileName, resolveSecret, runCli } from './ios-signing.mjs';
+import { CLOUD_SIGNING_FAILURE, ensureCertificate, exportOptionsPlist, parseBundle, prepare, profileName, resolveSecret, runCli } from './ios-signing.mjs';
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const credentials = { issuerId: '12345678-1234-1234-1234-123456789abc', keyId: 'ABC1234567', keyP8: privateKey.export({ type: 'pkcs8', format: 'pem' }) };
@@ -202,4 +202,12 @@ test('the p12 is importable by macOS security (real keychain, skipped elsewhere)
   t.after(() => { try { execFileSync('security', ['delete-keychain', keychain]); } catch { /* already gone */ } });
   execFileSync('security', ['import', result.p12Path, '-k', keychain, '-P', password, '-f', 'pkcs12', '-A'], { stdio: 'pipe' });
   assert.match(execFileSync('security', ['find-identity', '-p', 'basic', keychain], { encoding: 'utf8' }), /1 identities found|1 valid identities found|CN=/);
+});
+
+test('an unreadable managed dist-p12 secret gives a message that points at distributionP12Secret', async () => {
+  const fetchImpl = async () => json({}, 403);
+  await assert.rejects(
+    () => ensureCertificate({ client: {}, secret: { project: 'baynex-shared', name: 'apple-ci-cd-dist-p12' }, fetch: fetchImpl, token: 't', dir: '/nonexistent' }),
+    /管理された配布証明書 apple-ci-cd-dist-p12 を読めません.*権限がありません.*distributionP12Secret/,
+  );
 });

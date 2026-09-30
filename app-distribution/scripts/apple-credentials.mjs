@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { postBaynex, toStderr } from './baynex-oidc.mjs';
 import { readConfig, splitConfigArgs } from './config.mjs';
-import { writeAccountFiles } from './secret-manager.mjs';
+import { writeAccountFiles, writeDistributionFiles } from './secret-manager.mjs';
 
 const keyIdPattern = /^[A-Z0-9]{10}$/;
 const issuerPattern = /^[a-fA-F0-9-]{36}$/;
@@ -44,15 +44,22 @@ export async function writeCredentialFiles(directory, values) {
 export async function loadAppleCredentials({ slug = '', directory, config, env = process.env, fetch: fetchImpl = fetch, print = toStderr, warn = toStderr, loadFallback = writeAccountFiles }) {
   if (!directory) throw new Error('出力先ディレクトリがありません');
   const skipBaynex = config?.baynex?.apple?.available === false;
+  let baynexOk = false;
   if (!skipBaynex) {
     try {
       const values = await fetchCloudSigning({ env, fetch: fetchImpl, print });
       await writeCredentialFiles(directory, values);
       print(`Apple 鍵の取得経路: ${sourceLabels.baynex}`);
-      return 'baynex';
+      baynexOk = true;
     } catch (error) {
       warn(`Baynex OIDC で Apple 鍵を取得できませんでした（${error.message}）。Secret Manager / GitHub Secrets にフォールバックします`);
     }
+  }
+  if (baynexOk) {
+    // Baynex only supplies the ASC API key. The repo's appleAccount still owns the distribution certificate (any resolve mode),
+    // so the manual-signing path stays selected instead of falling to cloud signing and the managed fallback.
+    await writeDistributionFiles({ account: slug ? config?.appleAccounts?.[slug] : undefined, directory, token: env.GOOGLE_OAUTH_ACCESS_TOKEN, fetch: fetchImpl, print });
+    return 'baynex';
   }
   if (!slug) throw new Error('Baynex から Apple 鍵を取得できず、apps.json に appleAccount もありません。Baynex の CI アクセスを登録するか、appleAccount / appleAccounts を設定してください');
   let source = 'github-secrets';

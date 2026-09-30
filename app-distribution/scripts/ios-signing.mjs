@@ -79,7 +79,11 @@ async function certificateStillValid(client, bundle, now) {
 
 // Returns { bundle, created }. Creates a certificate only when nothing valid is stored and the secret can be written.
 export async function ensureCertificate({ client, secret, fetch: fetchImpl, token, dir, now = Date.now(), print = toStderr }) {
-  const stored = await readSecretOptional({ ...secret, token, fetch: fetchImpl });
+  let stored;
+  try { stored = await readSecretOptional({ ...secret, token, fetch: fetchImpl }); }
+  catch (error) {
+    throw new Error(`管理された配布証明書 ${secret.name} を読めません（${error.message}）。既存の配布証明書を使う場合は apps.json の appleAccounts に distributionP12Secret / distributionP12PasswordSecret / secretProject を設定してください。管理された証明書を使う場合は ${secret.name} の読み取りと追加の権限を CI サービスアカウントに付与してください`);
+  }
   if (stored) {
     const bundle = parseBundle(stored);
     if (await certificateStillValid(client, bundle, now)) { print(`保存済みの Apple Distribution 証明書を再利用します（ID ${bundle.certificateId}）`); return { bundle, created: false }; }
