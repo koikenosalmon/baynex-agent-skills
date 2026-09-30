@@ -165,6 +165,18 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 
 指定すると、Android / iOS の両ジョブがそのバージョンを `subosito/flutter-action` に渡します（`channel: stable` は維持）。未指定なら従来どおり `stable` の最新版です。`3.41` や `3.x` のような曖昧な指定は受け付けません。チームが Flutter をアップグレードしたときは、この値も更新してください。`bootstrap.mjs` を再実行しても値は保持されます。
 
+## iOS の署名（cloud signing と手動署名フォールバック）
+
+iOS ジョブは最初に Xcode の cloud signing（`-allowProvisioningUpdates` と App Store Connect API キー）で ad-hoc / release-testing を export します。これが `Cloud signing permission error` / `No signing certificate "iOS Distribution" found` / `No profiles for ... were found` で失敗したときだけ、自動で管理された手動署名に切り替えます（それ以外の失敗ではフォールバックしません）。
+
+- `scripts/ios-signing.mjs prepare` が Apple Distribution 証明書を 1 つだけ管理します。秘密鍵と証明書は p12 として Secret Manager の `apple-<slug>-dist-p12`（`appleAccounts.<slug>.distP12Secret` で変更可）に JSON で保存し、Apple 上でまだ有効なら再利用します。保存済みが無い、または Apple 上で失効・期限切れのときだけ新規作成します。証明書は失効させません。
+- 保存できることを先に確認してから証明書を作るため、鍵を失って枠を消費することはありません。書き込み権限が無いときは何も作らずに止まります（`grant-apple-account.mjs` が `secretVersionAdder` を付与します）。
+- Bundle ID ごとに `Baynex AdHoc <bundleId>` という名前の `IOS_APP_ADHOC` プロファイルを、有効な iOS 端末すべてで作り直します。同名（このツールが作ったもの）だけを置き換え、人や Xcode が作ったプロファイルには触れません。
+- `scripts/ios-keychain.sh` が一時 keychain とプロファイルを入れ、ジョブ最後に必ず削除します。`ExportOptions.plist` は `signingStyle: manual` と `provisioningProfiles` を使います。
+- Apple の配布証明書には上限があります。作成が 409 で断られたら、使われていない証明書を Apple Developer で手動で失効させてから再実行してください。
+- 同じ Apple アカウントのアプリを複数同時に初回実行すると、証明書が重複して作られることがあります。初回は 1 アプリずつ実行してください。
+- リポジトリ変数 `BAYNEX_IOS_SIGNING` で `auto`（既定）/ `cloud`（フォールバックなし）/ `manual`（最初から手動署名）を選べます。
+
 ## 問題があるとき
 
 | 症状 | 対処 |
@@ -172,6 +184,7 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 | Firebase リリース一覧が 404 | bootstrap と workflow が probe upload で自動開始します。失敗時は API と `roles/firebaseappdistro.admin` を確認します。 |
 | GitHub WIF 認証に失敗 | IAM 反映に約 5 分かかることがあります。待って再実行し、repo 条件と `roles/iam.workloadIdentityUser` を確認します。 |
 | check の Baynex CI アクセスが ⚠️ 拒否 | Baynex の製品設定でこのリポジトリ（`repositoryId` / `ownerId`）を登録して有効にします。未登録でも従来の経路で動きます。 |
+| iOS export が cloud signing で失敗する | 自動で手動署名に切り替わります。`apple-<slug>-dist-p12` の書き込み権限（`secretVersionAdder`）と Apple の配布証明書の上限を確認します。 |
 | Apple secret が空または読めない | 所有者に console で新しいバージョンを登録してもらい、`secretAccessor` を確認します。 |
 | `Cloud billing quota exceeded` | GCP プロジェクト作成時の課金枠です。所有者に枠の解消を依頼し、勝手に別プロジェクトへ変更しません。 |
 | `flavor` / `target` が `TODO` | アプリチームに実際の Flutter 設定を確認します。 |

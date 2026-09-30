@@ -46,10 +46,14 @@ export function createClient(credentials, fetchImpl = fetch) {
   async function request(path, options = {}) {
     const response = await fetchImpl(new URL(path, BASE), { ...options, headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}) } });
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error(`Apple API ${response.status}: キーが無効か、アクセスが『管理』ではありません`);
-      if (response.status === 409) throw new Error('Apple API 409: 識別子または端末が既に登録されているか、登録上限に達しています');
-      throw new Error(`Apple API ${response.status}: リクエストに失敗しました`);
+      let detail = '';
+      try { detail = ((await response.json?.())?.errors || []).map((entry) => entry?.detail).filter(Boolean).join(' ').slice(0, 300); } catch { /* no body */ }
+      const fail = (message) => Object.assign(new Error(message), { appleDetail: detail });
+      if (response.status === 401 || response.status === 403) throw fail(`Apple API ${response.status}: キーが無効か、アクセスが『管理』ではありません`);
+      if (response.status === 409) throw fail('Apple API 409: 識別子または端末が既に登録されているか、登録上限に達しています');
+      throw fail(`Apple API ${response.status}: リクエストに失敗しました`);
     }
+    if (response.status === 204) return {};
     const body = await response.json();
     if (!body || typeof body !== 'object') throw new Error('Apple API の応答が不正です');
     return body;

@@ -40,6 +40,8 @@ export function ensureResource(label, describeArgs, createArgs, dryRun = false) 
   report('✅', `${label}: 作成済み`);
 }
 
+export const distP12SecretName = (slug) => `apple-${slug}-dist-p12`;
+
 export function accountNames(slug, project = 'baynex-shared') {
   if (!slugPattern.test(slug)) throw new Error('Apple アカウント slug が不正です');
   if (!projectPattern.test(project)) throw new Error('共有 GCP プロジェクト ID が不正です');

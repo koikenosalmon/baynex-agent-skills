@@ -339,6 +339,10 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           BRANCH: ${{ github.ref_name }}
           TEAM_ID: ${{ steps.prepare.outputs.team_id }}
+          KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
+          IOS_SIGNING_MODE: ${{ vars.BAYNEX_IOS_SIGNING || 'auto' }}
+          APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
           # install-profile talks to App Store Connect, so it needs the same key the
           # earlier steps used; without it the build stops before it can sign.
           APP_STORE_CONNECT_ISSUER_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-issuer-id
@@ -363,6 +367,7 @@ jobs:
             if [[ -f "$RUNNER_TEMP/apple-account/distribution.p12.password" ]]; then p12_password="$(cat "$RUNNER_TEMP/apple-account/distribution.p12.password")"; fi
             security import "$RUNNER_TEMP/apple-account/distribution.p12" -k "$keychain" -P "$p12_password" -T /usr/bin/codesign -T /usr/bin/security
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+            # shellcheck disable=SC2046
             security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
             profile_json=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs" install-profile "$APP_IOS_BUNDLE_ID")
             profile_name=$(printf '%s' "$profile_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
@@ -393,7 +398,35 @@ jobs:
           issuer_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-issuer-id")
           auth=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/apple-account/app-store-connect.p8" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer_id")
           xcodebuild archive -workspace ios/Runner.xcworkspace -scheme "$FLAVOR" -archivePath "$RUNNER_TEMP/Runner.xcarchive" "${auth[@]}" CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID"
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" -exportPath "$RUNNER_TEMP/ios-export" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" "${auth[@]}"
+          export_args=(-exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" -exportPath "$RUNNER_TEMP/ios-export")
+          # Xcode cloud signing is documented for App Store / Developer ID / Enterprise; ad-hoc exports often fail with these messages.
+          cloud_failure='Cloud signing permission error|No signing certificate .?(iOS|Apple) Distribution.? found|No profiles for .+ were found'
+          exported=false
+          # A distribution.p12 from the account config already signs manually; the managed fallback is for accounts without one.
+          if [[ -n "${profile_name:-}" && "$IOS_SIGNING_MODE" == auto ]]; then IOS_SIGNING_MODE=cloud; fi
+          if [[ "$IOS_SIGNING_MODE" != manual ]]; then
+            if xcodebuild "${export_args[@]}" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" "${auth[@]}" 2>&1 | tee "$RUNNER_TEMP/export-cloud.log"; then exported=true; fi
+          fi
+          if [[ "$exported" != true ]]; then
+            if [[ "$IOS_SIGNING_MODE" == cloud ]]; then echo 'cloud signing の export に失敗しました（BAYNEX_IOS_SIGNING=cloud のためフォールバックしません）' >&2; exit 1; fi
+            if [[ "$IOS_SIGNING_MODE" == auto ]] && ! grep -Eq "$cloud_failure" "$RUNNER_TEMP/export-cloud.log"; then echo 'cloud signing 以外の理由で export に失敗しました（手動署名にはフォールバックしません）' >&2; exit 1; fi
+            echo '::warning::cloud signing で ad-hoc export できないため、管理された手動署名（Apple Distribution 証明書 + IOS_APP_ADHOC プロファイル）に切り替えます'
+            rm -rf "$RUNNER_TEMP/ios-export" "$RUNNER_TEMP/ios-signing"
+            bundle_ids=$(python3 - "$RUNNER_TEMP/Runner.xcarchive" <<'PYIDS'
+          import glob, plistlib, sys
+          app = glob.glob(sys.argv[1] + '/Products/Applications/*.app')[0]
+          ids = []
+          for path in [app + '/Info.plist'] + glob.glob(app + '/PlugIns/*.appex/Info.plist'):
+              with open(path, 'rb') as handle:
+                  ids.append(plistlib.load(handle)['CFBundleIdentifier'])
+          print(','.join(dict.fromkeys(ids)))
+          PYIDS
+            )
+            node "$KIT/ios-signing.mjs" prepare --out "$RUNNER_TEMP/ios-signing" --team "$TEAM_ID" --method "$method" --bundle-ids "$bundle_ids" --account "$APPLE_ACCOUNT" > "$RUNNER_TEMP/ios-signing.json"
+            jq -r '"署名: 証明書 \(.certificateId)（新規作成: \(.certificateCreated)）、端末 \(.devices) 台、プロファイル \(.profiles | length) 件"' "$RUNNER_TEMP/ios-signing.json" >> "$GITHUB_STEP_SUMMARY"
+            "$KIT/ios-keychain.sh" install "$RUNNER_TEMP/ios-signing"
+            xcodebuild "${export_args[@]}" -exportOptionsPlist "$RUNNER_TEMP/ios-signing/ExportOptions.plist"
+          fi
           artifact=$(find "$RUNNER_TEMP/ios-export" -maxdepth 1 -name '*.ipa' -type f -print -quit)
           test -n "$artifact"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
@@ -427,9 +460,11 @@ jobs:
       - name: Remove temporary signing material
         if: always()
         run: |
+          # shellcheck disable=SC2046
           security list-keychains -d user -s $(security list-keychains -d user | tr -d '"' | grep -v baynex-signing || true) || true
           security delete-keychain "$RUNNER_TEMP/baynex-signing.keychain-db" 2>/dev/null || true
-          rm -rf "$RUNNER_TEMP/apple-account" && rm -f "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"
+          "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/ios-keychain.sh" cleanup "$RUNNER_TEMP/ios-signing" || true
+          rm -rf "$RUNNER_TEMP/apple-account" "$RUNNER_TEMP/ios-signing" && rm -f "$RUNNER_TEMP/export-cloud.log" "$RUNNER_TEMP/ios-signing.json" "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"
       - name: Distribution summary
         if: always()
         env:
