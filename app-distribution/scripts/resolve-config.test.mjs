@@ -116,3 +116,13 @@ test('the CLI fails when neither apps.json nor Baynex can supply apps, and warns
   const generated = await runCli(['--config', join(dir, 'missing.json')], { ...oidcEnv, RUNNER_TEMP: dir }, fakeFetch(() => json(remote({ apps: [{ ...remote().apps[0], flavor: 'coach', target: 'lib/main.dart' }] }))).fetch, () => {}, () => {});
   assert.equal(JSON.parse(await readFile(generated.target, 'utf8')).apps[0].flavor, 'coach');
 });
+
+test('the repo appleAccount / appleAccounts (distribution certificate settings) survive the merge in both modes', () => {
+  const ciCd = { secretProject: 'baynex-shared', distributionP12Secret: 'apple-ci-cd-distribution-p12', distributionP12PasswordSecret: 'apple-ci-cd-distribution-p12-password' };
+  const withCert = { ...repo, appleAccounts: { 'ci-cd': ciCd }, apps: [{ ...repoApp, appleAccount: 'ci-cd' }] };
+  for (const mode of ['repo', 'baynex']) {
+    const merged = mergeConfig(withCert, remote({ mode }));
+    assert.deepEqual(merged.appleAccounts, { 'ci-cd': ciCd }, mode);
+    assert.equal(merged.apps[0].appleAccount, 'ci-cd', mode);
+  }
+});

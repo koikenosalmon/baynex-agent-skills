@@ -109,6 +109,24 @@ export async function loadAccount(account, token, fetchImpl = fetch) {
   return values;
 }
 
+// The ASC API key may come from Baynex while the repo still owns the distribution certificate. Only the
+// distribution fields of the repo's account entry are read here; the API key secrets are not required.
+export async function writeDistributionFiles({ account, directory, token, fetch: fetchImpl = fetch, print = console.log }) {
+  if (!account || typeof account !== 'object' || !account[DISTRIBUTION_FIELD]) return false;
+  if (!token) throw new Error(`配布証明書 ${account[DISTRIBUTION_FIELD]} を読むための Google OAuth アクセストークンがありません（apps.json の distributionP12Secret を設定した場合は Workload Identity で Secret Manager に接続してください）`);
+  let p12;
+  let password;
+  try {
+    p12 = await accessSecret({ project: account.secretProject, name: account[DISTRIBUTION_FIELD], token, fetch: fetchImpl });
+    if (account[DISTRIBUTION_PASSWORD_FIELD]) password = await accessSecret({ project: account.secretProject, name: account[DISTRIBUTION_PASSWORD_FIELD], token, fetch: fetchImpl });
+  } catch (error) { throw new Error(`apps.json で指定された配布証明書を Secret Manager から読めません（${error.message}）。自動作成には切り替えません`); }
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(join(directory, 'distribution.p12'), Buffer.from(p12, 'base64'), { mode: 0o600, flag: 'w' });
+  if (password) await writeFile(join(directory, 'distribution.p12.password'), password, { mode: 0o600, flag: 'w' });
+  print('配布証明書: apps.json の distributionP12Secret から取得しました');
+  return true;
+}
+
 export async function writeAccountFiles({ config, slug, directory, token, fallback, fetch: fetchImpl = fetch, print = console.log, onSource }) {
   const accounts = validateAppleAccounts(config);
   if (!Object.hasOwn(accounts, slug)) throw new Error(`Apple アカウントがありません: ${slug}`);
