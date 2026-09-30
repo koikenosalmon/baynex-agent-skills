@@ -16,6 +16,7 @@ export const githubHostKeys = [
 ];
 
 export const missingCredentialsMessage = '非公開 Git 依存が設定されていますが認証情報がありません。`GIT_DEPENDENCY_SSH_KEY` か `GIT_DEPENDENCY_TOKEN` を設定してください（`flutter pub get` は失敗する可能性があります）。';
+const spawnTimeoutMs = 15_000;
 const tokenPattern = /^[A-Za-z0-9_.-]{1,255}$/;
 
 const quote = (value) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -24,7 +25,7 @@ export function buildGitConfig({ repos, mode, token, knownHostsPath }) {
   const lines = [];
   if (mode === 'ssh') {
     if (/['\n\r]/.test(knownHostsPath)) throw new Error('RUNNER_TEMP のパスに使えない文字があります');
-    const command = `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile='${knownHostsPath}'`;
+    const command = `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile='${knownHostsPath}'`;
     lines.push('[core]', `\tsshCommand = ${quote(command)}`);
   }
   for (const repo of repos) {
@@ -66,13 +67,13 @@ export function setup({ config, env = process.env, spawn = spawnSync, print = co
       mode = 'ssh';
       const knownHostsPath = join(directory, 'known_hosts');
       writeFileSync(knownHostsPath, knownHostsContent(), { mode: 0o600 });
-      const started = spawn('ssh-agent', ['-s'], { encoding: 'utf8' });
+      const started = spawn('ssh-agent', ['-s'], { encoding: 'utf8', timeout: spawnTimeoutMs });
       const socket = /SSH_AUTH_SOCK=([^;]+);/.exec(started.stdout || '')?.[1];
       const pid = /SSH_AGENT_PID=(\d+);/.exec(started.stdout || '')?.[1];
       if (started.status !== 0 || !socket || !pid) throw new Error('ssh-agent を起動できません');
       state.agent = { socket, pid };
       writeFileSync(join(directory, 'state.json'), JSON.stringify(state), { mode: 0o600 });
-      const added = spawn('ssh-add', ['-'], { input: `${sshKey}\n`, encoding: 'utf8', env: { ...env, SSH_AUTH_SOCK: socket } });
+      const added = spawn('ssh-add', ['-'], { input: `${sshKey}\n`, encoding: 'utf8', timeout: spawnTimeoutMs, env: { ...env, SSH_AUTH_SOCK: socket } });
       if (added.status !== 0) throw new Error('GIT_DEPENDENCY_SSH_KEY を ssh-agent に追加できません（パスフレーズなしの OpenSSH 形式の秘密鍵が必要です）');
       writeFileSync(configPath, buildGitConfig({ repos, mode, knownHostsPath }), { mode: 0o600 });
       exports.push(`SSH_AUTH_SOCK=${socket}`, `SSH_AGENT_PID=${pid}`);
@@ -84,7 +85,8 @@ export function setup({ config, env = process.env, spawn = spawnSync, print = co
     }
     writeFileSync(join(directory, 'state.json'), JSON.stringify(state), { mode: 0o600 });
     const base = Number.parseInt(env.GIT_CONFIG_COUNT || '0', 10) || 0;
-    exports.push(`GIT_CONFIG_COUNT=${base + 1}`, `GIT_CONFIG_KEY_${base}=include.path`, `GIT_CONFIG_VALUE_${base}=${configPath}`);
+    // Never let git (pub get, gradle plugins, flutter tooling) stop to ask for a username or password.
+    exports.push('GIT_TERMINAL_PROMPT=0', `GIT_CONFIG_COUNT=${base + 1}`, `GIT_CONFIG_KEY_${base}=include.path`, `GIT_CONFIG_VALUE_${base}=${configPath}`);
     appendLines(env.GITHUB_ENV, exports);
     appendLines(env.GITHUB_STEP_SUMMARY, [`- 非公開 Git 依存: ${mode === 'ssh' ? 'SSH 鍵（GIT_DEPENDENCY_SSH_KEY）' : 'トークン（GIT_DEPENDENCY_TOKEN）'}で ${repos.join(', ')} を取得します。`]);
     return { mode, repos };
@@ -99,7 +101,7 @@ export function cleanup({ env = process.env, spawn = spawnSync } = {}) {
   const directory = join(env.RUNNER_TEMP, 'git-dependency');
   let state;
   try { state = JSON.parse(readFileSync(join(directory, 'state.json'), 'utf8')); } catch { state = null; }
-  if (state?.agent) spawn('ssh-agent', ['-k'], { env: { ...env, SSH_AUTH_SOCK: state.agent.socket, SSH_AGENT_PID: state.agent.pid }, stdio: 'ignore' });
+  if (state?.agent) spawn('ssh-agent', ['-k'], { env: { ...env, SSH_AUTH_SOCK: state.agent.socket, SSH_AGENT_PID: state.agent.pid }, stdio: 'ignore', timeout: spawnTimeoutMs });
   rmSync(directory, { recursive: true, force: true });
   if (state) {
     appendLines(env.GITHUB_ENV, [`GIT_CONFIG_COUNT=${state.previous?.GIT_CONFIG_COUNT ?? '0'}`, `SSH_AUTH_SOCK=${state.previous?.SSH_AUTH_SOCK ?? ''}`, `SSH_AGENT_PID=${state.previous?.SSH_AGENT_PID ?? ''}`]);

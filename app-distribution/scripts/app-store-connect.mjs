@@ -6,6 +6,7 @@ import { toStderr } from './baynex-oidc.mjs';
 import { fetchAscToken } from './apple-credentials.mjs';
 import { validateAppleAccounts } from './secret-manager.mjs';
 import { readConfig, splitConfigArgs, validateBuildNumberOffset, validateFlutterVersion, validatePrivateGitDependencies } from './config.mjs';
+import { timedFetch } from './http.mjs';
 
 const BASE = 'https://api.appstoreconnect.apple.com';
 const bundlePattern = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -41,7 +42,7 @@ export function createJwt({ issuerId, keyId, keyP8, now = Date.now() }) {
   return `${unsigned}.${sign('sha256', Buffer.from(unsigned), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
 }
 // credentials is either { token } (a JWT minted by Baynex) or { issuerId, keyId, keyP8 } (signed here).
-export function createClient(credentials, fetchImpl = fetch) {
+export function createClient(credentials, fetchImpl = timedFetch) {
   const jwt = credentials.token ?? createJwt(credentials);
   async function request(path, options = {}) {
     const response = await fetchImpl(new URL(path, BASE), { ...options, headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}) } });
@@ -131,7 +132,7 @@ export async function registerDevices(client, devices) {
   }
   return { requested: requested.size, existing: requested.size - created, created, remaining: null };
 }
-export async function runCli(args, env = process.env, fetchImpl = fetch) {
+export async function runCli(args, env = process.env, fetchImpl = timedFetch) {
   ({ args, env } = splitConfigArgs(args, env));
   const [command, argument] = args;
   if (!['check', 'ensure-bundle-ids', 'register-devices', 'install-profile', 'development-certificates'].includes(command) || (['register-devices', 'install-profile'].includes(command) ? !argument || args.length !== 2 : args.length > 2)) throw new Error('使い方: app-store-connect.mjs check|ensure-bundle-ids [app-id]|register-devices <file>|install-profile <bundle-identifier>|development-certificates');

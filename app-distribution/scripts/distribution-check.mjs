@@ -13,6 +13,7 @@ import { fetchTesterUdids } from './firebase-udids.mjs';
 import { ensureStarted } from './firebase-activate.mjs';
 import { knownHostsContent } from './git-dependencies.mjs';
 import { readConfig, splitConfigArgs, validateBuildNumberOffset, validateFlutterVersion, validatePrivateGitDependencies } from './config.mjs';
+import { timedFetch } from './http.mjs';
 
 export const distributionNotStarted = '自動開始に失敗しました。Firebase コンソールの App Distribution で『使ってみる』を押してください';
 const fields = { keyP8: 'keyP8Secret', keyId: 'keyIdSecret', issuerId: 'issuerIdSecret' };
@@ -80,7 +81,7 @@ function probeGitDependency(repo, env, spawn) {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
-export async function runCheck({ config, env = process.env, fetch: fetchImpl = fetch, print = console.log, spawn = spawnSync, workflowsDir = '.github/workflows' } = {}) {
+export async function runCheck({ config, env = process.env, fetch: fetchImpl = timedFetch, print = console.log, spawn = spawnSync, workflowsDir = '.github/workflows' } = {}) {
   const apps = validateApps(config);
   const rows = [];
   let failed = false;

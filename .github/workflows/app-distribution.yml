@@ -120,6 +120,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.app_present == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -157,7 +158,10 @@ jobs:
           GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}
         run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs setup
       - name: Install dependencies
+        timeout-minutes: 15
         working-directory: ${{ env.APP_DIR }}
+        env:
+          GIT_TERMINAL_PROMPT: '0'
         run: flutter pub get
       - name: Configure optional release signing
         if: needs.detect.outputs.android_signing == 'true'
@@ -181,21 +185,60 @@ jobs:
           chmod 600 "$RUNNER_TEMP/key.properties" "$RUNNER_TEMP/upload-keystore.jks"
       - id: build
         name: Build APK
+        # The healthy build takes 11-15 minutes. A build that has not finished by now is stuck; stop it so the
+        # log artifact below is collected instead of the job idling until someone cancels it.
+        timeout-minutes: 30
         working-directory: ${{ env.APP_DIR }}
         env:
           BRANCH: ${{ github.ref_name }}
           FLAVOR: ${{ env.APP_FLAVOR }}
           TARGET: ${{ env.APP_TARGET }}
           RUN_NUMBER: ${{ github.run_number }}
+          KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
+          # Nothing in the build may stop to ask a question on a runner nobody is watching.
+          GIT_TERMINAL_PROMPT: '0'
+          GCM_INTERACTIVE: never
+          CI: 'true'
         run: |
           set -euo pipefail
+          # Gradle's file-system watcher raised "Already watching path" in every healthy run before the packaging
+          # phase stalled for minutes; a single-use runner gains nothing from the watcher or a resident daemon.
+          mkdir -p "$HOME/.gradle"
+          printf '%s\n' 'org.gradle.vfs.watch=false' 'org.gradle.daemon=false' >> "$HOME/.gradle/gradle.properties"
+          log_dir="$RUNNER_TEMP/android-build-logs"
+          mkdir -p "$log_dir"
+          "$KIT/build-diagnostics.sh" sample "$log_dir" 300 &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--flavor "$FLAVOR" -t "$TARGET" --release --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
-          flutter build apk "${args[@]}"
+          flutter build apk --verbose "${args[@]}" 2>&1 | tee "$log_dir/flutter-build.log"
           artifact="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
           test -f "$artifact"
           echo "artifact=$PWD/$artifact" >> "$GITHUB_OUTPUT"
+      - name: Collect Android build logs
+        if: failure() || cancelled()
+        env:
+          KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GIT_DEPENDENCY_TOKEN: ${{ secrets.GIT_DEPENDENCY_TOKEN }}
+          GIT_DEPENDENCY_SSH_KEY: ${{ secrets.GIT_DEPENDENCY_SSH_KEY }}
+        run: |
+          log_dir="$RUNNER_TEMP/android-build-logs"
+          mkdir -p "$log_dir"
+          "$KIT/build-diagnostics.sh" collect "$log_dir" || true
+          node "$KIT/scrub-log.mjs" --env STORE_PASSWORD --env KEY_ALIAS --env KEY_PASSWORD --env GIT_DEPENDENCY_TOKEN --env GIT_DEPENDENCY_SSH_KEY "$log_dir" || rm -rf "$log_dir"
+      - name: Upload Android build logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-logs${{ matrix.index != 0 && format('-{0}', matrix.index) || '' }}
+          path: ${{ runner.temp }}/android-build-logs
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Write release notes
         run: .baynex-app-distribution-kit/app-distribution/scripts/baynex-release-notes.sh > release-notes.txt
       - id: google_auth
@@ -215,6 +258,7 @@ jobs:
       - id: upload
         name: Upload to Firebase App Distribution
         if: needs.detect.outputs.wif_ready == 'true'
+        timeout-minutes: 20
         env:
           FIREBASE_APP_ID: ${{ env.FIREBASE_APP_ID_ANDROID }}
           ARTIFACT: ${{ steps.build.outputs.artifact }}
@@ -245,6 +289,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.app_present == 'true'
     runs-on: macos-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -282,6 +327,7 @@ jobs:
           service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
       - id: credentials
         name: Load Apple account key (Baynex OIDC, then Secret Manager, then GitHub Secrets)
+        timeout-minutes: 5
         env:
           APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
@@ -303,11 +349,15 @@ jobs:
         run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs setup
       - name: Install dependencies
         if: steps.credentials.outcome == 'success'
+        timeout-minutes: 15
         working-directory: ${{ env.APP_DIR }}
+        env:
+          GIT_TERMINAL_PROMPT: '0'
         run: flutter pub get
       - id: prepare
         name: Register bundle ID and tester devices
         if: steps.credentials.outcome == 'success'
+        timeout-minutes: 10
         env:
           APP_STORE_CONNECT_ISSUER_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-issuer-id
           APP_STORE_CONNECT_KEY_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-key-id
@@ -332,6 +382,8 @@ jobs:
       - id: build
         name: Build cloud-signed IPA
         if: steps.credentials.outcome == 'success'
+        # Build, archive and export together take about 15 minutes.
+        timeout-minutes: 45
         working-directory: ${{ env.APP_DIR }}
         env:
           FLAVOR: ${{ env.APP_FLAVOR }}
@@ -340,6 +392,7 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           TEAM_ID: ${{ steps.prepare.outputs.team_id }}
           KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
+          GIT_TERMINAL_PROMPT: '0'
           IOS_SIGNING_MODE: ${{ vars.BAYNEX_IOS_SIGNING || 'auto' }}
           APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
@@ -476,6 +529,7 @@ jobs:
       - id: upload
         name: Upload to Firebase App Distribution
         if: steps.credentials.outcome == 'success' && needs.detect.outputs.wif_ready == 'true'
+        timeout-minutes: 20
         env:
           FIREBASE_APP_ID: ${{ env.FIREBASE_APP_ID_IOS }}
           ARTIFACT: ${{ steps.build.outputs.artifact }}

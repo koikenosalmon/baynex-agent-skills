@@ -20,6 +20,7 @@ import { toStderr } from './baynex-oidc.mjs';
 import { createClient } from './app-store-connect.mjs';
 import { readSecretOptional, ensureSecret, addSecretVersion, canAddSecretVersion } from './secret-manager.mjs';
 import { readConfig, splitConfigArgs } from './config.mjs';
+import { timedFetch } from './http.mjs';
 
 const run = promisify(execFile);
 const bundlePattern = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -145,7 +146,7 @@ export function exportOptionsPlist({ method, teamId, profiles }) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>method</key>\n  <string>${method}</string>\n  <key>signingStyle</key>\n  <string>manual</string>\n  <key>signingCertificate</key>\n  <string>Apple Distribution</string>\n  <key>teamID</key>\n  <string>${teamId}</string>\n  <key>provisioningProfiles</key>\n  <dict>\n${entries}\n  </dict>\n</dict>\n</plist>\n`;
 }
 
-export async function prepare({ client, secret, token, fetch: fetchImpl = fetch, out, teamId, method, bundleIds, now, print = toStderr }) {
+export async function prepare({ client, secret, token, fetch: fetchImpl = timedFetch, out, teamId, method, bundleIds, now, print = toStderr }) {
   if (!teamPattern.test(teamId || '') || !methods.has(method)) throw new Error('--team / --method が不正です');
   if (!Array.isArray(bundleIds) || !bundleIds.length || bundleIds.length > 20 || bundleIds.some((id) => !bundlePattern.test(id))) throw new Error('--bundle-ids が不正です');
   const work = await mkdtemp(join(tmpdir(), 'ios-signing-'));
@@ -180,7 +181,7 @@ export function resolveSecret(config, env, slug) {
   return { project, name };
 }
 
-export async function runCli(argv, env = process.env, fetchImpl = fetch) {
+export async function runCli(argv, env = process.env, fetchImpl = timedFetch) {
   ({ args: argv, env } = splitConfigArgs(argv, env));
   const [command, ...rest] = argv;
   if (command !== 'prepare') throw new Error('使い方: ios-signing.mjs prepare --out <dir> --team <TEAM> --method ad-hoc|release-testing --bundle-ids a,b [--account <slug>]');

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
+import { timedFetch } from './http.mjs';
 
 const base = 'https://firebaseappdistribution.googleapis.com';
 const probe = new TextEncoder().encode('invalid Firebase App Distribution probe');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function ensureStarted({ appId, token, fetch: fetchImpl = fetch, sleep = pause, now = () => performance.now() }) {
+export async function ensureStarted({ appId, token, fetch: fetchImpl = timedFetch, sleep = pause, now = () => performance.now() }) {
   const match = /^1:(\d+):(ios|android):[A-Za-z0-9]+$/.exec(appId || '');
   if (!match) throw new Error('Firebase アプリ ID が不正です');
   if (!token) throw new Error('Firebase のアクセストークンがありません');

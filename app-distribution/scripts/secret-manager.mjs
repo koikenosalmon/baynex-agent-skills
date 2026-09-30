@@ -3,6 +3,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readConfig, splitConfigArgs } from './config.mjs';
+import { timedFetch } from './http.mjs';
 
 const slugPattern = /^[a-z][a-z0-9-]{1,30}$/;
 const projectPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
@@ -40,7 +41,7 @@ function crc32c(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-export async function accessSecret({ project, name, token, fetch: fetchImpl = fetch }) {
+export async function accessSecret({ project, name, token, fetch: fetchImpl = timedFetch }) {
   if (!projectPattern.test(project || '') || !secretPattern.test(name || '')) throw new Error('Secret Manager の設定が不正です');
   if (!token) throw new Error('Google OAuth アクセストークンがありません');
   const url = `https://secretmanager.googleapis.com/v1/projects/${project}/secrets/${name}/versions/latest:access`;
@@ -69,12 +70,12 @@ function checkSecretRef(project, name) {
 }
 
 // Latest version as text, or null when the secret or its first version does not exist yet.
-export async function readSecretOptional({ project, name, token, fetch: fetchImpl = fetch }) {
+export async function readSecretOptional({ project, name, token, fetch: fetchImpl = timedFetch }) {
   try { return await accessSecret({ project, name, token, fetch: fetchImpl }); }
   catch (error) { if (/値がまだありません/.test(error.message)) return null; throw error; }
 }
 
-export async function ensureSecret({ project, name, token, fetch: fetchImpl = fetch }) {
+export async function ensureSecret({ project, name, token, fetch: fetchImpl = timedFetch }) {
   checkSecretRef(project, name);
   const found = await smRequest({ url: `${API}/projects/${project}/secrets/${name}`, token, fetch: fetchImpl });
   if (found.ok) return false;
@@ -84,7 +85,7 @@ export async function ensureSecret({ project, name, token, fetch: fetchImpl = fe
   return true;
 }
 
-export async function canAddSecretVersion({ project, name, token, fetch: fetchImpl = fetch }) {
+export async function canAddSecretVersion({ project, name, token, fetch: fetchImpl = timedFetch }) {
   checkSecretRef(project, name);
   const permission = 'secretmanager.versions.add';
   const response = await smRequest({ url: `${API}/projects/${project}/secrets/${name}:testIamPermissions`, token, fetch: fetchImpl, method: 'POST', body: { permissions: [permission] } });
@@ -93,7 +94,7 @@ export async function canAddSecretVersion({ project, name, token, fetch: fetchIm
   return Array.isArray(body.permissions) && body.permissions.includes(permission);
 }
 
-export async function addSecretVersion({ project, name, token, value, fetch: fetchImpl = fetch }) {
+export async function addSecretVersion({ project, name, token, value, fetch: fetchImpl = timedFetch }) {
   checkSecretRef(project, name);
   const bytes = Buffer.from(String(value), 'utf8');
   if (!bytes.length || bytes.length > MAX_BYTES) throw new Error(`${name} に保存する値のサイズが不正です`);
@@ -101,7 +102,7 @@ export async function addSecretVersion({ project, name, token, value, fetch: fet
   if (!response.ok) throw new Error(`Secret Manager ${response.status}`);
 }
 
-export async function loadAccount(account, token, fetchImpl = fetch) {
+export async function loadAccount(account, token, fetchImpl = timedFetch) {
   const values = {};
   for (const [key, field] of Object.entries(fields)) values[key] = await accessSecret({ project: account.secretProject, name: account[field], token, fetch: fetchImpl });
   if (account[DISTRIBUTION_FIELD]) values.distributionP12 = await accessSecret({ project: account.secretProject, name: account[DISTRIBUTION_FIELD], token, fetch: fetchImpl });
@@ -111,7 +112,7 @@ export async function loadAccount(account, token, fetchImpl = fetch) {
 
 // The ASC API key may come from Baynex while the repo still owns the distribution certificate. Only the
 // distribution fields of the repo's account entry are read here; the API key secrets are not required.
-export async function writeDistributionFiles({ account, directory, token, fetch: fetchImpl = fetch, print = console.log }) {
+export async function writeDistributionFiles({ account, directory, token, fetch: fetchImpl = timedFetch, print = console.log }) {
   if (!account || typeof account !== 'object' || !account[DISTRIBUTION_FIELD]) return false;
   if (!token) throw new Error(`配布証明書 ${account[DISTRIBUTION_FIELD]} を読むための Google OAuth アクセストークンがありません（apps.json の distributionP12Secret を設定した場合は Workload Identity で Secret Manager に接続してください）`);
   let p12;
@@ -127,7 +128,7 @@ export async function writeDistributionFiles({ account, directory, token, fetch:
   return true;
 }
 
-export async function writeAccountFiles({ config, slug, directory, token, fallback, fetch: fetchImpl = fetch, print = console.log, onSource }) {
+export async function writeAccountFiles({ config, slug, directory, token, fallback, fetch: fetchImpl = timedFetch, print = console.log, onSource }) {
   const accounts = validateAppleAccounts(config);
   if (!Object.hasOwn(accounts, slug)) throw new Error(`Apple アカウントがありません: ${slug}`);
   if (!directory) throw new Error('出力先ディレクトリがありません');
@@ -155,7 +156,7 @@ export async function writeAccountFiles({ config, slug, directory, token, fallba
   return values;
 }
 
-export async function runCli(args, env = process.env, fetchImpl = fetch, print = console.log) {
+export async function runCli(args, env = process.env, fetchImpl = timedFetch, print = console.log) {
   ({ args, env } = splitConfigArgs(args, env));
   if (args.length !== 3 || args[0] !== 'load-account') throw new Error('使い方: secret-manager.mjs load-account <account> <directory>');
   const config = await readConfig(env);

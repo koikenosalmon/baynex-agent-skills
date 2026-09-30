@@ -126,7 +126,7 @@ test('a key that ssh-add rejects fails the step and tears the agent down', (t) =
   assert.equal(existsSync(join(box.env.RUNNER_TEMP, 'git-dependency')), false);
 });
 
-test('ssh mode works with a real ssh-agent and never leaves an agent or key behind', (t) => {
+test('ssh mode works with a real ssh-agent and never leaves an agent or key behind', async (t) => {
   const box = sandbox(t);
   const keyPath = join(box.root, 'id');
   if (spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', keyPath]).status !== 0 || spawnSync('ssh-agent', ['-h']).error) return t.skip('OpenSSH is not available');
@@ -137,6 +137,11 @@ test('ssh mode works with a real ssh-agent and never leaves an agent or key behi
   assert.equal(listed.status, 0);
   assert.match(listed.stdout, /ED25519/);
   cleanup({ env: { ...box.env, PATH: process.env.PATH } });
+  // ssh-agent -k signals the agent and returns; the process exits a moment later, longer on a loaded machine.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try { process.kill(Number(pid), 0); } catch { break; }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   assert.throws(() => process.kill(Number(pid), 0), { code: 'ESRCH' });
 });
 
@@ -149,3 +154,25 @@ test('buildGitConfig escapes values written to the git config', () => {
 function readdirNames(directory) {
   return spawnSync('ls', ['-A', directory], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
 }
+
+test('git never prompts and ssh never waits forever on a private dependency', (t) => {
+  const box = sandbox(t, { GIT_DEPENDENCY_TOKEN: 'tok' });
+  setup({ config, env: box.env, print: (line) => box.print(line) });
+  assert.equal(exported(box.env).GIT_TERMINAL_PROMPT, '0');
+  const ssh = buildGitConfig({ repos: ['OTERA-Co-Ltd/otera-packages'], mode: 'ssh', knownHostsPath: '/tmp/known_hosts' });
+  for (const option of ['BatchMode=yes', 'StrictHostKeyChecking=yes', 'ConnectTimeout=30', 'ServerAliveInterval=15', "UserKnownHostsFile='/tmp/known_hosts'"]) assert.ok(ssh.includes(option), option);
+});
+
+test('ssh-agent and ssh-add are bounded by a timeout', (t) => {
+  const box = sandbox(t, { GIT_DEPENDENCY_SSH_KEY: 'KEY' });
+  const calls = [];
+  const spawn = (command, args, options) => {
+    calls.push({ command, options });
+    if (command === 'ssh-agent' && args[0] === '-s') return { status: 0, stdout: 'SSH_AUTH_SOCK=/tmp/agent.1; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=42; export SSH_AGENT_PID;\n' };
+    return { status: 0, stdout: '' };
+  };
+  setup({ config, env: box.env, spawn, print: (line) => box.print(line) });
+  cleanup({ env: box.env, spawn });
+  assert.ok(calls.length >= 3);
+  for (const call of calls) assert.ok(call.options.timeout > 0 && call.options.timeout <= 60000, `${call.command} has no timeout`);
+});

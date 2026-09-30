@@ -7,6 +7,7 @@ import { grantAppleAccount } from './grant-apple-account.mjs';
 import { ensureStarted } from './scripts/firebase-activate.mjs';
 import { validateApps } from './scripts/app-store-connect.mjs';
 import { defaultRun, detectPrivateDependencies, mergeDependencies, provisionDependencyCredential } from './private-dependencies.mjs';
+import { timedFetch } from './scripts/http.mjs';
 
 const kitOwner = 'koikenosalmon';
 
@@ -115,7 +116,7 @@ export async function pairApps(ios, android, oldApps = [], appleAccount, { inclu
   return paired;
 }
 
-async function listFirebaseApps(project, platform, token, fetchImpl = fetch) {
+async function listFirebaseApps(project, platform, token, fetchImpl = timedFetch) {
   const apps = [];
   let pageToken = '';
   const seen = new Set();
