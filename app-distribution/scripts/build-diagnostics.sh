@@ -10,6 +10,14 @@ directory=${2:-}
 if [[ -z "$directory" ]]; then echo '使い方: build-diagnostics.sh sample|collect <directory> [interval-seconds]' >&2; exit 2; fi
 mkdir -p "$directory"
 
+# Diagnostics must never fill the disk they are diagnosing: keep only the newest 5 MB of a file.
+cap_file() {
+  local file=$1
+  if [[ -f "$file" && $(wc -c < "$file") -gt 5242880 ]]; then
+    tail -c 5242880 "$file" > "$file.tmp" && mv -f "$file.tmp" "$file"
+  fi
+}
+
 case "$command" in
   sample)
     # Memory every $interval seconds (default 60) to the log file AND stdout (the job log survives a runner that
@@ -22,8 +30,10 @@ case "$command" in
       {
         echo "=== memory $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
         free -m 2>/dev/null || true
+        df -h / "${RUNNER_TEMP:-/tmp}" 2>/dev/null || true
         ps -eo pid,rss,pmem,etimes,comm --sort=-rss 2>/dev/null | head -6 || true
       } 2>&1 | tee -a "$directory/memory-samples.log"
+      cap_file "$directory/memory-samples.log"
       if (( count % 5 == 0 )); then
         {
           echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
@@ -36,6 +46,7 @@ case "$command" in
             done
           fi
         } >> "$directory/process-samples.log" 2>&1
+        cap_file "$directory/process-samples.log"
       fi
     done
     ;;

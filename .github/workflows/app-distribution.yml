@@ -135,6 +135,8 @@ jobs:
           repository: koikenosalmon/baynex-agent-skills
           ref: ${{ inputs.kit-ref }}
           path: .baynex-app-distribution-kit
+      - name: Free disk space
+        run: .baynex-app-distribution-kit/app-distribution/scripts/free-disk-space.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -203,7 +205,7 @@ jobs:
           set -euo pipefail
           # Gradle's file-system watcher raised "Already watching path" in every healthy run before the packaging
           # phase stalled; the runner also died once (16 GB exhausted during lintVital). Bound memory, skip
-          # lint-vital and add swap. Details in android-gradle-setup.sh.
+          # lint-vital (swap is opt-in via BAYNEX_SWAP_GB). Details in android-gradle-setup.sh.
           "$KIT/android-gradle-setup.sh"
           log_dir="$RUNNER_TEMP/android-build-logs"
           mkdir -p "$log_dir"
@@ -213,7 +215,8 @@ jobs:
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
           args=(--flavor "$FLAVOR" -t "$TARGET" --release --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
-          flutter build apk --verbose "${args[@]}" 2>&1 | tee "$log_dir/flutter-build.log"
+          # The verbose log is tens of thousands of lines; keep only the newest ~50 MB on disk (full output stays in the job log).
+          flutter build apk --verbose "${args[@]}" 2>&1 | "$KIT/capped-log.sh" "$log_dir/flutter-build.log" 50
           artifact="build/app/outputs/flutter-apk/app-${FLAVOR}-release.apk"
           test -f "$artifact"
           echo "artifact=$PWD/$artifact" >> "$GITHUB_OUTPUT"
