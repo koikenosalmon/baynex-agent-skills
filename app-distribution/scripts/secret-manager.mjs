@@ -47,6 +47,48 @@ export async function accessSecret({ project, name, token, fetch: fetchImpl = fe
   return bytes.toString('utf8');
 }
 
+const API = 'https://secretmanager.googleapis.com/v1';
+async function smRequest({ url, token, fetch: fetchImpl, method = 'GET', body }) {
+  if (!token) throw new Error('Google OAuth アクセストークンがありません');
+  return fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+}
+function checkSecretRef(project, name) {
+  if (!projectPattern.test(project || '') || !secretPattern.test(name || '')) throw new Error('Secret Manager の設定が不正です');
+}
+
+// Latest version as text, or null when the secret or its first version does not exist yet.
+export async function readSecretOptional({ project, name, token, fetch: fetchImpl = fetch }) {
+  try { return await accessSecret({ project, name, token, fetch: fetchImpl }); }
+  catch (error) { if (/値がまだありません/.test(error.message)) return null; throw error; }
+}
+
+export async function ensureSecret({ project, name, token, fetch: fetchImpl = fetch }) {
+  checkSecretRef(project, name);
+  const found = await smRequest({ url: `${API}/projects/${project}/secrets/${name}`, token, fetch: fetchImpl });
+  if (found.ok) return false;
+  if (found.status !== 404) throw new Error(`${name} を確認できません（Secret Manager ${found.status}）`);
+  const created = await smRequest({ url: `${API}/projects/${project}/secrets?secretId=${name}`, token, fetch: fetchImpl, method: 'POST', body: { replication: { automatic: {} }, labels: { 'baynex-purpose': 'ios-dist-p12' } } });
+  if (!created.ok && created.status !== 409) throw new Error(`${name} を作成できません（Secret Manager ${created.status}）`);
+  return true;
+}
+
+export async function canAddSecretVersion({ project, name, token, fetch: fetchImpl = fetch }) {
+  checkSecretRef(project, name);
+  const permission = 'secretmanager.versions.add';
+  const response = await smRequest({ url: `${API}/projects/${project}/secrets/${name}:testIamPermissions`, token, fetch: fetchImpl, method: 'POST', body: { permissions: [permission] } });
+  if (!response.ok) return false;
+  const body = await response.json().catch(() => ({}));
+  return Array.isArray(body.permissions) && body.permissions.includes(permission);
+}
+
+export async function addSecretVersion({ project, name, token, value, fetch: fetchImpl = fetch }) {
+  checkSecretRef(project, name);
+  const bytes = Buffer.from(String(value), 'utf8');
+  if (!bytes.length || bytes.length > MAX_BYTES) throw new Error(`${name} に保存する値のサイズが不正です`);
+  const response = await smRequest({ url: `${API}/projects/${project}/secrets/${name}:addVersion`, token, fetch: fetchImpl, method: 'POST', body: { payload: { data: bytes.toString('base64'), dataCrc32c: String(crc32c(bytes)) } } });
+  if (!response.ok) throw new Error(`Secret Manager ${response.status}`);
+}
+
 export async function loadAccount(account, token, fetchImpl = fetch) {
   const values = {};
   for (const [key, field] of Object.entries(fields)) values[key] = await accessSecret({ project: account.secretProject, name: account[field], token, fetch: fetchImpl });

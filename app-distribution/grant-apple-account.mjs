@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
-import { accountNames, gcloud, parseArgs, report, serviceAccountPattern } from './cloud.mjs';
+import { accountNames, distP12SecretName, gcloud, parseArgs, report, serviceAccountPattern } from './cloud.mjs';
 
 export function grantAppleAccount({ slug, serviceAccount, sharedProject = 'baynex-shared', dryRun = false }) {
   const account = accountNames(slug, sharedProject);
@@ -13,6 +13,15 @@ export function grantAppleAccount({ slug, serviceAccount, sharedProject = 'bayne
     if (dryRun) { report('⚠️', `${name}: secretAccessor を付与予定`); continue; }
     gcloud(['secrets', 'add-iam-policy-binding', name, `--project=${sharedProject}`, `--member=serviceAccount:${serviceAccount}`, '--role=roles/secretmanager.secretAccessor', '--condition=None', '--quiet', '--format=none']);
     report('✅', `${name}: 読み取り権限を確認しました`);
+  }
+  // ad-hoc manual-signing fallback: CI reads the stored certificate and adds a version only when it has to create one.
+  const distName = distP12SecretName(slug);
+  if (gcloud(['secrets', 'describe', distName, `--project=${sharedProject}`, '--format=value(name)'], { allowFailure: true }) === null) {
+    report('⚠️', `${distName}: Secret Manager にありません。add-apple-account.mjs を再実行すると作成されます（ad-hoc 手動署名フォールバックに必要）`);
+  } else if (dryRun) report('⚠️', `${distName}: secretAccessor / secretVersionAdder を付与予定`);
+  else {
+    for (const role of ['secretAccessor', 'secretVersionAdder']) gcloud(['secrets', 'add-iam-policy-binding', distName, `--project=${sharedProject}`, `--member=serviceAccount:${serviceAccount}`, `--role=roles/secretmanager.${role}`, '--condition=None', '--quiet', '--format=none']);
+    report('✅', `${distName}: 読み取りと新バージョン追加の権限を確認しました`);
   }
 }
 

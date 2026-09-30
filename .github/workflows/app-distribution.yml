@@ -330,7 +330,7 @@ jobs:
           node .baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs register-devices "$RUNNER_TEMP/tester-udids.json" > "$RUNNER_TEMP/device-counts.json"
           jq -r '"登録済み: \(.existing)、新規登録: \(.created)、対象: \(.requested)"' "$RUNNER_TEMP/device-counts.json" >> "$GITHUB_STEP_SUMMARY"
       - id: build
-        name: Build cloud-signed IPA
+        name: Build IPA (cloud signing, managed manual signing fallback)
         if: steps.credentials.outcome == 'success'
         working-directory: ${{ env.APP_DIR }}
         env:
@@ -339,6 +339,13 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           BRANCH: ${{ github.ref_name }}
           TEAM_ID: ${{ steps.prepare.outputs.team_id }}
+          KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
+          IOS_SIGNING_MODE: ${{ vars.BAYNEX_IOS_SIGNING || 'auto' }}
+          APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
+          APP_STORE_CONNECT_ISSUER_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-issuer-id
+          APP_STORE_CONNECT_KEY_ID_FILE: ${{ runner.temp }}/apple-account/app-store-connect-key-id
+          APP_STORE_CONNECT_KEY_P8_FILE: ${{ runner.temp }}/apple-account/app-store-connect.p8
         run: |
           set -euo pipefail
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
@@ -358,7 +365,33 @@ jobs:
           issuer_id=$(cat "$RUNNER_TEMP/apple-account/app-store-connect-issuer-id")
           auth=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/apple-account/app-store-connect.p8" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer_id")
           xcodebuild archive -workspace ios/Runner.xcworkspace -scheme "$FLAVOR" -archivePath "$RUNNER_TEMP/Runner.xcarchive" "${auth[@]}" CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID"
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" -exportPath "$RUNNER_TEMP/ios-export" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" "${auth[@]}"
+          export_args=(-exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" -exportPath "$RUNNER_TEMP/ios-export")
+          # Xcode cloud signing is documented for App Store / Developer ID / Enterprise; ad-hoc exports often fail with these messages.
+          cloud_failure='Cloud signing permission error|No signing certificate .?(iOS|Apple) Distribution.? found|No profiles for .+ were found'
+          exported=false
+          if [[ "$IOS_SIGNING_MODE" != manual ]]; then
+            if xcodebuild "${export_args[@]}" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" "${auth[@]}" 2>&1 | tee "$RUNNER_TEMP/export-cloud.log"; then exported=true; fi
+          fi
+          if [[ "$exported" != true ]]; then
+            if [[ "$IOS_SIGNING_MODE" == cloud ]]; then echo 'cloud signing の export に失敗しました（BAYNEX_IOS_SIGNING=cloud のためフォールバックしません）' >&2; exit 1; fi
+            if [[ "$IOS_SIGNING_MODE" == auto ]] && ! grep -Eq "$cloud_failure" "$RUNNER_TEMP/export-cloud.log"; then echo 'cloud signing 以外の理由で export に失敗しました（手動署名にはフォールバックしません）' >&2; exit 1; fi
+            echo '::warning::cloud signing で ad-hoc export できないため、管理された手動署名（Apple Distribution 証明書 + IOS_APP_ADHOC プロファイル）に切り替えます'
+            rm -rf "$RUNNER_TEMP/ios-export" "$RUNNER_TEMP/ios-signing"
+            bundle_ids=$(python3 - "$RUNNER_TEMP/Runner.xcarchive" <<'PYIDS'
+          import glob, plistlib, sys
+          app = glob.glob(sys.argv[1] + '/Products/Applications/*.app')[0]
+          ids = []
+          for path in [app + '/Info.plist'] + glob.glob(app + '/PlugIns/*.appex/Info.plist'):
+              with open(path, 'rb') as handle:
+                  ids.append(plistlib.load(handle)['CFBundleIdentifier'])
+          print(','.join(dict.fromkeys(ids)))
+          PYIDS
+            )
+            node "$KIT/ios-signing.mjs" prepare --out "$RUNNER_TEMP/ios-signing" --team "$TEAM_ID" --method "$method" --bundle-ids "$bundle_ids" --account "$APPLE_ACCOUNT" > "$RUNNER_TEMP/ios-signing.json"
+            jq -r '"署名: 証明書 \(.certificateId)（新規作成: \(.certificateCreated)）、端末 \(.devices) 台、プロファイル \(.profiles | length) 件"' "$RUNNER_TEMP/ios-signing.json" >> "$GITHUB_STEP_SUMMARY"
+            "$KIT/ios-keychain.sh" install "$RUNNER_TEMP/ios-signing"
+            xcodebuild "${export_args[@]}" -exportOptionsPlist "$RUNNER_TEMP/ios-signing/ExportOptions.plist"
+          fi
           artifact=$(find "$RUNNER_TEMP/ios-export" -maxdepth 1 -name '*.ipa' -type f -print -quit)
           test -n "$artifact"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
@@ -391,7 +424,9 @@ jobs:
         run: node .baynex-app-distribution-kit/app-distribution/scripts/git-dependencies.mjs cleanup
       - name: Remove temporary signing material
         if: always()
-        run: rm -rf "$RUNNER_TEMP/apple-account" && rm -f "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"
+        run: |
+          "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/ios-keychain.sh" cleanup "$RUNNER_TEMP/ios-signing" || true
+          rm -rf "$RUNNER_TEMP/apple-account" "$RUNNER_TEMP/ios-signing" && rm -f "$RUNNER_TEMP/export-cloud.log" "$RUNNER_TEMP/ios-signing.json" "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/bundles.json" "$RUNNER_TEMP/tester-udids.json" "$RUNNER_TEMP/device-counts.json"
       - name: Distribution summary
         if: always()
         env:
