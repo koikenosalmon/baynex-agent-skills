@@ -47,5 +47,42 @@ test('iOS のビルドに App Store Connect の鍵が渡っている', () => {
 test('プロファイルの取得には bundle identifier を渡す', () => {
   const command = lines.find((line) => line.includes('install-profile "$'));
   assert.ok(command, 'install-profile の呼び出しが無い');
-  assert.ok(command.includes('$APP_IOS_BUNDLE_ID'), 'bundle identifier を渡していない');
+  assert.ok(command.includes('$target_bundle_id'), 'ターゲットごとの bundle identifier を渡していない');
+  assert.ok(workflow.includes('ios-project-signing.rb" list'), 'ターゲット（拡張を含む）の bundle ID を列挙していない');
+});
+
+// 使い捨ての runner で -allowProvisioningUpdates を使うと、Apple Development 証明書が毎回 API で作られる
+// (秘密鍵は runner と一緒に消える)。チームの上限に達すると archive が失敗する。
+// 配布証明書とプロファイルがあるときの経路には、その手段を一切置かない。
+const branch = (start, end) => {
+  const from = lines.findIndex((line) => line.includes(start));
+  assert.ok(from > 0, `${start} が見つからない`);
+  const to = lines.findIndex((line, index) => index > from && line.trim() === end);
+  assert.ok(to > from, `${end} が見つからない`);
+  return lines.slice(from, to).join('\n');
+};
+
+test('手動署名の素材があるときの archive / export は開発証明書を作れない形にする', () => {
+  const manual = branch('if [[ "$manual_material" == true ]]; then', 'else');
+  assert.match(manual, /xcodebuild archive /);
+  assert.match(manual, /ios-project-signing\.rb" apply/, 'ターゲットごとの手動署名を設定していない');
+  assert.doesNotMatch(manual.replace(/^\s*#.*$/gm, ''), /allowProvisioningUpdates|authenticationKey|CODE_SIGN_STYLE=Automatic/);
+  assert.match(manual, /-exportOptionsPlist/);
+});
+
+test('-allowProvisioningUpdates は配布証明書が無い cloud signing の経路にだけある', () => {
+  const elseAt = lines.findIndex((line, index) => index > at('if [[ "$manual_material" == true ]]; then') && line.trim() === 'else');
+  const uses = lines.map((line, index) => ({ line, index })).filter(({ line }) => /allowProvisioningUpdates/.test(line) && !line.trim().startsWith('#'));
+  assert.ok(uses.length > 0);
+  for (const { index } of uses) assert.ok(index > elseAt, `${index + 1} 行目が手動署名の経路にある`);
+});
+
+test('cloud signing の経路では開発証明書の蓄積を警告する', () => {
+  assert.ok(workflow.includes('app-store-connect.mjs" development-certificates'), '件数の確認が無い');
+  assert.ok(at('app-store-connect.mjs" development-certificates') < at('xcodebuild archive -workspace ios/Runner.xcworkspace -scheme "$FLAVOR" -archivePath "$RUNNER_TEMP/Runner.xcarchive" "${auth[@]}"'), 'archive より後で確認している');
+});
+
+test('ExportOptions は手動署名の素材があるときアプリと拡張すべてのプロファイルを名指しする', () => {
+  assert.ok(workflow.includes("options['provisioningProfiles'] = json.load(handle)"));
+  assert.ok(workflow.includes("options['signingStyle'] = 'manual'"));
 });
