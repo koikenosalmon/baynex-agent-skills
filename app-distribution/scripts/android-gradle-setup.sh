@@ -4,7 +4,8 @@
 # workers can exhaust the runner; the runner then dies with "received a shutdown signal" and leaves no logs.
 # ~/.gradle/gradle.properties overrides the project-level file, so nothing in the app repo has to change.
 #   android-gradle-setup.sh            write properties, init script and (best effort) swap
-# Env: BAYNEX_ANDROID_LINT_VITAL=true keeps the lintVital* tasks; BAYNEX_SWAP_GB sets swap size (default 6, 0 = off).
+# Env: BAYNEX_ANDROID_LINT_VITAL=true keeps the lintVital* tasks; BAYNEX_SWAP_GB sets swap size (default 0 = off; a swapfile takes runner disk, which the hosted runner
+# is short of). Opt in only on runners with spare disk.
 set -uo pipefail
 
 gradle_home="${GRADLE_USER_HOME:-$HOME/.gradle}"
@@ -30,7 +31,7 @@ if (System.getenv('BAYNEX_ANDROID_LINT_VITAL') != 'true') {
 }
 GRADLE
 
-swap_gb="${BAYNEX_SWAP_GB:-6}"
+swap_gb="${BAYNEX_SWAP_GB:-0}"
 if [[ "$swap_gb" =~ ^[1-9][0-9]?$ && "$(uname -s)" == Linux ]] && ! swapon --show 2>/dev/null | grep -q /baynex-swap; then
   if sudo -n fallocate -l "${swap_gb}G" /baynex-swap 2>/dev/null \
     && sudo -n chmod 600 /baynex-swap && sudo -n mkswap /baynex-swap >/dev/null 2>&1 && sudo -n swapon /baynex-swap 2>/dev/null; then
@@ -40,3 +41,4 @@ if [[ "$swap_gb" =~ ^[1-9][0-9]?$ && "$(uname -s)" == Linux ]] && ! swapon --sho
   fi
 fi
 free -m 2>/dev/null || true
+df -h / 2>/dev/null || true

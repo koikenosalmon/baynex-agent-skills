@@ -27,7 +27,7 @@ test('Build APK is bounded and cannot stop to ask a question', () => {
   assert.ok(minutes(build) > 0 && minutes(build) <= 30, 'timeout-minutes');
   assert.match(build, /GIT_TERMINAL_PROMPT: '0'/);
   assert.match(build, /set -euo pipefail/);
-  assert.match(build, /flutter build apk --verbose .*\| tee "\$log_dir\/flutter-build\.log"/);
+  assert.match(build, /flutter build apk --verbose .*\| "\$KIT\/capped-log\.sh" "\$log_dir\/flutter-build\.log" 50/);
   assert.match(build, /artifact=\$PWD\/\$artifact/, 'the artifact output contract');
   assert.match(build, /android-gradle-setup\.sh/);
   assert.match(build, /build-diagnostics\.sh" sample "\$log_dir" 60 &/);
@@ -41,6 +41,34 @@ test('Gradle memory is bounded, lint-vital skipped, swap best effort, memory sam
   assert.match(setup, /sudo -n fallocate/);
   const diagnostics = await readFile(join(root, 'app-distribution/scripts/build-diagnostics.sh'), 'utf8');
   assert.match(diagnostics, /free -m[\s\S]*tee -a "\$directory\/memory-samples\.log"/);
+});
+
+test('disk is protected: swap off by default, disk freed early, logs and diagnostics size-capped', async () => {
+  const setup = await readFile(join(root, 'app-distribution/scripts/android-gradle-setup.sh'), 'utf8');
+  assert.match(setup, /BAYNEX_SWAP_GB:-0\}/);
+  const free = step('Free disk space');
+  assert.match(free, /free-disk-space\.sh/);
+  assert.ok(workflow.indexOf('Free disk space') < workflow.indexOf('subosito/flutter-action'), 'free disk before Flutter install');
+  const script = await readFile(join(root, 'app-distribution/scripts/free-disk-space.sh'), 'utf8');
+  for (const path of ['/usr/share/dotnet', '/opt/ghc', '/opt/hostedtoolcache/CodeQL']) assert.ok(script.includes(path), path);
+  assert.ok(!/rm -rf[^\n]*(android|sdk|ndk)/i.test(script), 'the Android SDK/NDK stay');
+  const diagnostics = await readFile(join(root, 'app-distribution/scripts/build-diagnostics.sh'), 'utf8');
+  assert.match(diagnostics, /df -h/);
+  assert.match(diagnostics, /cap_file "\$directory\/memory-samples\.log"/);
+});
+
+test('capped-log.sh passes everything through and bounds the file', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtemp, stat } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(join(tmpdir(), 'capped-'));
+  const file = join(dir, 'x.log');
+  const script = join(root, 'app-distribution/scripts/capped-log.sh');
+  const input = 'line of build output\n'.repeat(200000); // ~4 MB
+  const out = execFileSync('bash', [script, file, '1'], { input, maxBuffer: 64 * 1024 * 1024 }).toString();
+  assert.equal(out, input);
+  const size = (await stat(file)).size + (await stat(`${file}.1`)).size;
+  assert.ok(size <= 1024 * 1024 + 1024, `capped, got ${size}`);
 });
 
 test('logs of a failed or cancelled Android build are scrubbed and uploaded', () => {
