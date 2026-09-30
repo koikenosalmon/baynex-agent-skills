@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import { validateUdid } from './app-store-connect.mjs';
+import { timedFetch } from './http.mjs';
 
-export async function fetchTesterUdids(appId, token, fetchImpl = fetch) {
+export async function fetchTesterUdids(appId, token, fetchImpl = timedFetch) {
   if (!/^1:\d+:ios:[a-fA-F0-9]+$/.test(appId || '')) throw new Error('Firebase iOS App ID が不正です');
   if (typeof token !== 'string' || !token.trim()) throw new Error('Google OAuth アクセストークンがありません');
   const url = `https://firebaseappdistribution.googleapis.com/v1alpha/apps/${encodeURIComponent(appId)}/testers:getTesterUdids`;

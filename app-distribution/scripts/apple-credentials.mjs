@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { postBaynex, toStderr } from './baynex-oidc.mjs';
 import { readConfig, splitConfigArgs } from './config.mjs';
 import { writeAccountFiles, writeDistributionFiles } from './secret-manager.mjs';
+import { timedFetch } from './http.mjs';
 
 const keyIdPattern = /^[A-Z0-9]{10}$/;
 const issuerPattern = /^[a-fA-F0-9-]{36}$/;
@@ -41,7 +42,7 @@ export async function writeCredentialFiles(directory, values) {
   }
 }
 
-export async function loadAppleCredentials({ slug = '', directory, config, env = process.env, fetch: fetchImpl = fetch, print = toStderr, warn = toStderr, loadFallback = writeAccountFiles }) {
+export async function loadAppleCredentials({ slug = '', directory, config, env = process.env, fetch: fetchImpl = timedFetch, print = toStderr, warn = toStderr, loadFallback = writeAccountFiles }) {
   if (!directory) throw new Error('出力先ディレクトリがありません');
   const skipBaynex = config?.baynex?.apple?.available === false;
   let baynexOk = false;
