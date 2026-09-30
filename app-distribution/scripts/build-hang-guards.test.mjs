@@ -29,7 +29,18 @@ test('Build APK is bounded and cannot stop to ask a question', () => {
   assert.match(build, /set -euo pipefail/);
   assert.match(build, /flutter build apk --verbose .*\| tee "\$log_dir\/flutter-build\.log"/);
   assert.match(build, /artifact=\$PWD\/\$artifact/, 'the artifact output contract');
-  assert.match(build, /org\.gradle\.vfs\.watch=false/);
+  assert.match(build, /android-gradle-setup\.sh/);
+  assert.match(build, /build-diagnostics\.sh" sample "\$log_dir" 60 &/);
+});
+
+test('Gradle memory is bounded, lint-vital skipped, swap best effort, memory sampled to stdout', async () => {
+  const setup = await readFile(join(root, 'app-distribution/scripts/android-gradle-setup.sh'), 'utf8');
+  for (const property of ['org.gradle.vfs.watch=false', 'org.gradle.daemon=false', 'org.gradle.parallel=false', 'org.gradle.workers.max=2', 'kotlin.daemon.jvmargs=-Xmx2g']) assert.ok(setup.includes(property), property);
+  assert.match(setup, /org\.gradle\.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/);
+  assert.ok(setup.includes("startsWith('lintVital') }.configureEach { enabled = false }"));
+  assert.match(setup, /sudo -n fallocate/);
+  const diagnostics = await readFile(join(root, 'app-distribution/scripts/build-diagnostics.sh'), 'utf8');
+  assert.match(diagnostics, /free -m[\s\S]*tee -a "\$directory\/memory-samples\.log"/);
 });
 
 test('logs of a failed or cancelled Android build are scrubbed and uploaded', () => {

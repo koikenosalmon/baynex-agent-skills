@@ -202,12 +202,12 @@ jobs:
         run: |
           set -euo pipefail
           # Gradle's file-system watcher raised "Already watching path" in every healthy run before the packaging
-          # phase stalled for minutes; a single-use runner gains nothing from the watcher or a resident daemon.
-          mkdir -p "$HOME/.gradle"
-          printf '%s\n' 'org.gradle.vfs.watch=false' 'org.gradle.daemon=false' >> "$HOME/.gradle/gradle.properties"
+          # phase stalled; the runner also died once (16 GB exhausted during lintVital). Bound memory, skip
+          # lint-vital and add swap. Details in android-gradle-setup.sh.
+          "$KIT/android-gradle-setup.sh"
           log_dir="$RUNNER_TEMP/android-build-logs"
           mkdir -p "$log_dir"
-          "$KIT/build-diagnostics.sh" sample "$log_dir" 300 &
+          "$KIT/build-diagnostics.sh" sample "$log_dir" 60 &
           sampler=$!
           trap 'kill "$sampler" 2>/dev/null || true' EXIT
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
