@@ -165,6 +165,18 @@ CI は既定で Flutter の `stable` 最新版を入れます。アプリが最�
 
 指定すると、Android / iOS の両ジョブがそのバージョンを `subosito/flutter-action` に渡します（`channel: stable` は維持）。未指定なら従来どおり `stable` の最新版です。`3.41` や `3.x` のような曖昧な指定は受け付けません。チームが Flutter をアップグレードしたときは、この値も更新してください。`bootstrap.mjs` を再実行しても値は保持されます。
 
+## iOS を自前の Mac で動かす
+
+iOS ジョブは既定で GitHub の `macos-latest` で動きます。自前の Mac（self-hosted runner）で動かすときは、呼び出し側で `ios-runs-on` に `runs-on` の JSON を渡します（任意）。
+
+```yaml
+    uses: koikenosalmon/baynex-agent-skills/.github/workflows/app-distribution.yml@v1
+    with:
+      ios-runs-on: '["self-hosted","macOS","ARM64"]'
+```
+
+self-hosted のときは、ビルド前に `/opt/homebrew/bin` を PATH に加え、`xcodebuild`、`pod`、`jq`、`python3`、`openssl` と Ruby の `xcodeproj` gem があるかを確認します。足りないものがあれば Summary に名前を出して止まります（runner のサービスは PATH を引き継がないため、Homebrew の道具が見えないことがあります）。常駐の Mac では Flutter をツールキャッシュに残すので、GitHub のキャッシュには保存しません。署名用の keychain と鍵はジョブの最後に削除します。
+
 ## iOS の署名（cloud signing と手動署名フォールバック）
 
 iOS ジョブの署名経路は 2 つです。
