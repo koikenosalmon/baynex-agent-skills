@@ -9,6 +9,10 @@ on:
       kit-ref:
         type: string
         default: v1
+      ios-runs-on:
+        type: string
+        default: '"macos-latest"'
+        description: JSON for the iOS job's runs-on, e.g. '["self-hosted","macOS","ARM64"]' for a persistent Mac
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -291,7 +295,7 @@ jobs:
   ios:
     needs: detect
     if: needs.detect.outputs.app_present == 'true'
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON(inputs.ios-runs-on) }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -299,6 +303,24 @@ jobs:
         index: ${{ fromJSON(needs.detect.outputs.matrix) }}
     name: iOS / app ${{ matrix.index }}
     steps:
+      - name: Check self-hosted Mac prerequisites
+        if: runner.environment == 'self-hosted'
+        run: |
+          # A persistent Mac runner starts from the service's PATH, which usually lacks Homebrew.
+          if [[ -d /opt/homebrew/bin ]]; then
+            echo /opt/homebrew/bin >> "$GITHUB_PATH"
+            export PATH="/opt/homebrew/bin:$PATH"
+          fi
+          missing=()
+          for tool in xcodebuild pod jq python3 openssl; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          ruby -e "require 'xcodeproj'" 2> /dev/null || missing+=("ruby gem xcodeproj")
+          if (( ${#missing[@]} > 0 )); then
+            echo "self-hosted Mac に不足しているツール: ${missing[*]}" >&2
+            echo "- Mac に不足: ${missing[*]}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -343,7 +365,8 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
+          # A persistent runner keeps its tool cache; uploading it to the Actions cache only costs time.
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Configure private Git dependencies
         if: steps.credentials.outcome == 'success'
         env:
