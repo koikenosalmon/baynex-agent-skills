@@ -88,12 +88,12 @@ test('every iOS build step and both jobs have a timeout', () => {
   }
   assert.ok(minutes(step('Build cloud-signed IPA')) <= 45);
   assert.match(step('Build cloud-signed IPA'), /GIT_TERMINAL_PROMPT: '0'/);
-  assert.match(workflow, /runs-on: ubuntu-latest\n    timeout-minutes: \d+/);
+  assert.match(workflow, /runs-on: ubicloud-standard-2\n    timeout-minutes: \d+/);
   assert.match(workflow, /runs-on: \$\{\{ fromJSON\(inputs\.ios-runs-on\) \}\}\n    timeout-minutes: \d+/);
 });
 
-test('the iOS runner defaults to macos-latest and checks a self-hosted Mac before building', () => {
-  assert.match(workflow, /ios-runs-on:\n        type: string\n        default: '"macos-latest"'/);
+test('the iOS runner defaults to the dedicated Mac mini and checks its prerequisites before building', () => {
+  assert.match(workflow, /ios-runs-on:\n        type: string\n        default: '\["self-hosted","macOS","ARM64","mac-mini-ios"\]'/);
   const check = step('Check self-hosted Mac prerequisites');
   assert.match(check, /if: runner\.environment == 'self-hosted'/);
   for (const tool of ['xcodebuild', 'pod', 'jq', 'python3', 'openssl']) assert.match(check, new RegExp(`\\b${tool}\\b`));

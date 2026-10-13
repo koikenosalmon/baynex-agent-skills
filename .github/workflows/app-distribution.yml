@@ -11,8 +11,8 @@ on:
         default: v1
       ios-runs-on:
         type: string
-        default: '"macos-latest"'
-        description: JSON for the iOS job's runs-on, e.g. '["self-hosted","macOS","ARM64"]' for a persistent Mac
+        default: '["self-hosted","macOS","ARM64","mac-mini-ios"]'
+        description: JSON labels for the dedicated self-hosted Mac mini iOS runner
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   detect:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     outputs:
       # Only flags and matrix indices leave this job. Config values (project ids, bundle ids, ...)
       # are re-read from apps.json inside each job: GitHub drops any output containing a masked secret.
@@ -123,7 +123,7 @@ jobs:
   android:
     needs: detect
     if: needs.detect.outputs.app_present == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     timeout-minutes: 75
     strategy:
       fail-fast: false
