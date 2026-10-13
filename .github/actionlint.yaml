@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    - ubicloud-standard-2
+    - ubicloud-standard-2-arm
+    - ubicloud-standard-2-ubuntu-2204
+    - mac-mini-ios
