@@ -13,6 +13,14 @@ on:
         type: string
         default: '["self-hosted","macOS","ARM64","mac-mini-ios"]'
         description: JSON labels for the dedicated self-hosted Mac mini iOS runner
+      ios-apns-environment:
+        type: string
+        default: production
+        description: Apple notification environment (production or development)
+      ios-development-build-script:
+        type: string
+        default: ''
+        description: Repository script that produces and verifies a development-signed IPA
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -406,7 +414,7 @@ jobs:
           node .baynex-app-distribution-kit/app-distribution/scripts/app-store-connect.mjs register-devices "$RUNNER_TEMP/tester-udids.json" > "$RUNNER_TEMP/device-counts.json"
           jq -r '"登録済み: \(.existing)、新規登録: \(.created)、対象: \(.requested)"' "$RUNNER_TEMP/device-counts.json" >> "$GITHUB_STEP_SUMMARY"
       - id: build
-        name: Build cloud-signed IPA
+        name: Build signed IPA
         if: steps.credentials.outcome == 'success'
         # Build, archive and export together take about 15 minutes.
         timeout-minutes: 45
@@ -420,6 +428,8 @@ jobs:
           KIT: ${{ github.workspace }}/.baynex-app-distribution-kit/app-distribution/scripts
           GIT_TERMINAL_PROMPT: '0'
           IOS_SIGNING_MODE: ${{ vars.BAYNEX_IOS_SIGNING || 'auto' }}
+          IOS_APNS_ENVIRONMENT: ${{ inputs.ios-apns-environment }}
+          IOS_DEVELOPMENT_BUILD_SCRIPT: ${{ inputs.ios-development-build-script }}
           APPLE_ACCOUNT: ${{ env.APP_APPLE_ACCOUNT }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google_auth.outputs.access_token }}
           # install-profile talks to App Store Connect, so it needs the same key the
@@ -430,6 +440,18 @@ jobs:
         run: |
           set -euo pipefail
           build_number=$(node "$GITHUB_WORKSPACE/.baynex-app-distribution-kit/app-distribution/scripts/build-number.mjs" --config "$DISTRIBUTION_CONFIG")
+          case "$IOS_APNS_ENVIRONMENT" in
+            development)
+              [[ "$IOS_DEVELOPMENT_BUILD_SCRIPT" =~ ^scripts/[a-zA-Z0-9_/-]+\.sh$ ]] || { echo '開発署名scriptのパスが不正です' >&2; exit 1; }
+              workspace_root=$(realpath "$GITHUB_WORKSPACE")
+              script=$(realpath "$workspace_root/$IOS_DEVELOPMENT_BUILD_SCRIPT")
+              [[ "$script" == "$workspace_root/"* && -f "$script" ]] || { echo '開発署名scriptがcheckout内にありません' >&2; exit 1; }
+              bash "$script"
+              exit 0
+              ;;
+            production) ;;
+            *) echo 'APNs環境はdevelopmentまたはproductionを指定してください' >&2; exit 1 ;;
+          esac
           args=(--release --no-codesign --flavor "$FLAVOR" -t "$TARGET" --build-number="$build_number")
           if [[ "$BRANCH" == release/* ]]; then args+=(--build-name="${BRANCH#release/}"); fi
           # Cloud signing only works where Xcode already holds the private key of a
