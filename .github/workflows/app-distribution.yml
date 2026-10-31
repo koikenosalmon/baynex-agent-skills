@@ -13,6 +13,10 @@ on:
         type: string
         default: '["self-hosted","macOS","ARM64","mac-mini-ios"]'
         description: JSON labels for the dedicated self-hosted Mac mini iOS runner
+      platform:
+        type: string
+        default: ''
+        description: "Manual runs only: ios | android | both (empty on a manual run: both). Automatic runs build Baynex's automatic platforms (iOS)."
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -63,6 +67,8 @@ jobs:
       matrix: ${{ steps.config.outputs.matrix }}
       wif_ready: ${{ steps.config.outputs.wif_ready }}
       android_signing: ${{ steps.config.outputs.android_signing }}
+      build_ios: ${{ steps.platforms.outputs.build_ios }}
+      build_android: ${{ steps.platforms.outputs.build_android }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,10 +125,15 @@ jobs:
             echo 'android_signing=false' >> "$GITHUB_OUTPUT"
             echo '- Android リリース署名未設定（任意）: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD' >> "$GITHUB_STEP_SUMMARY"
           fi
+      - id: platforms
+        name: Choose platforms
+        env:
+          PLATFORM_INPUT: ${{ inputs.platform }}
+        run: node .baynex-app-distribution-kit/app-distribution/scripts/platforms.mjs
 
   android:
     needs: detect
-    if: needs.detect.outputs.app_present == 'true'
+    if: needs.detect.outputs.app_present == 'true' && needs.detect.outputs.build_android == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 75
     strategy:
@@ -294,7 +305,7 @@ jobs:
 
   ios:
     needs: detect
-    if: needs.detect.outputs.app_present == 'true'
+    if: needs.detect.outputs.app_present == 'true' && needs.detect.outputs.build_ios == 'true'
     runs-on: ${{ fromJSON(inputs.ios-runs-on) }}
     timeout-minutes: 90
     strategy:

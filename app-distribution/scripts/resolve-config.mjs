@@ -30,11 +30,18 @@ function mergeApp(repoApp = {}, remote = {}) {
   return merged;
 }
 
+// Which platforms an automatic run builds; the rest are built only on a manual dispatch (platforms.mjs).
+const platformsOf = (value) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const pick = (list) => (Array.isArray(list) ? ['ios', 'android'].filter((platform) => list.includes(platform)) : undefined);
+  return { automatic: pick(value.automatic), manual: pick(value.manual) };
+};
+
 export function mergeConfig(repoConfig, remote) {
   const base = repoConfig ? structuredClone(repoConfig) : {};
   if (!remote) return base;
   const remoteApps = Array.isArray(remote.apps) ? remote.apps.filter((app) => text(app?.id)) : [];
-  const info = { mode: remote.mode, revision: remote.revision, productId: text(remote.productId), apple: remote.apple && typeof remote.apple === 'object' ? { name: text(remote.apple.name), available: remote.apple.available === true, cloudSigning: remote.apple.cloudSigning === true } : undefined, branch: remote.branch && typeof remote.branch === 'object' ? { kind: remote.branch.kind, version: remote.branch.version } : undefined };
+  const info = { mode: remote.mode, revision: remote.revision, productId: text(remote.productId), apple: remote.apple && typeof remote.apple === 'object' ? { name: text(remote.apple.name), available: remote.apple.available === true, cloudSigning: remote.apple.cloudSigning === true } : undefined, branch: remote.branch && typeof remote.branch === 'object' ? { kind: remote.branch.kind, version: remote.branch.version } : undefined, platforms: platformsOf(remote.platforms) };
   base.baynex = JSON.parse(JSON.stringify(info));
   const generated = !repoConfig;
   if (remote.mode !== 'baynex' && !generated) {

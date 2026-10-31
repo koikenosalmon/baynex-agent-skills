@@ -8,6 +8,12 @@ on:
       - 'feature/**'
       - 'epic/**'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 配布する OS（push では iOS だけ）
+        type: choice
+        options: [android, ios, both]
+        default: android
 permissions:
   contents: read
   id-token: write
@@ -17,4 +23,5 @@ jobs:
     with:
       config-path: distribution/apps.json
       kit-ref: v1
+      platform: ${{ inputs.platform }}
     secrets: inherit

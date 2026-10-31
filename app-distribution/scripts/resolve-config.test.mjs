@@ -126,3 +126,10 @@ test('the repo appleAccount / appleAccounts (distribution certificate settings) 
     assert.equal(merged.apps[0].appleAccount, 'ci-cd', mode);
   }
 });
+
+test('Baynex platforms reach the effective config in both modes, keeping only ios / android', () => {
+  const platforms = { automatic: ['ios', 'web'], manual: ['android'] };
+  assert.deepEqual(mergeConfig(repo, remote({ platforms })).baynex.platforms, { automatic: ['ios'], manual: ['android'] });
+  assert.deepEqual(mergeConfig(repo, remote({ mode: 'repo', platforms })).baynex.platforms, { automatic: ['ios'], manual: ['android'] });
+  assert.equal(mergeConfig(repo, remote()).baynex.platforms, undefined, 'an older Baynex without platforms leaves the kit default');
+});

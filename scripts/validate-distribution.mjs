@@ -54,7 +54,7 @@ assert(server?.command === 'node' && server.args?.[0] === './scripts/baynex-mcp-
 assert(server.env_vars?.length === 3, 'MCP config must declare only canonical credential names');
 
 export async function validateKitLayout(kitRoot = new URL('../app-distribution/', import.meta.url), workflowRoot = new URL('../.github/workflows/', import.meta.url)) {
-  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs', 'baynex-oidc.mjs', 'apple-credentials.mjs', 'resolve-config.mjs', 'development-certificates.mjs'];
+  const scripts = ['config.mjs', 'app-store-connect.mjs', 'secret-manager.mjs', 'firebase-activate.mjs', 'firebase-udids.mjs', 'distribution-check.mjs', 'git-dependencies.mjs', 'baynex-release-notes.sh', 'build-number.mjs', 'load-app.mjs', 'baynex-oidc.mjs', 'apple-credentials.mjs', 'resolve-config.mjs', 'development-certificates.mjs', 'platforms.mjs'];
   for (const file of scripts) {
     const source = await readFile(new URL(`scripts/${file}`, kitRoot), 'utf8');
     assert(source.length > 0, `${file}: empty kit script`);
@@ -71,8 +71,9 @@ export async function validateKitLayout(kitRoot = new URL('../app-distribution/'
   assert(!/GITHUB_WORKSPACE\/\$DISTRIBUTION_CONFIG/.test(build), 'app-distribution.yml: DISTRIBUTION_CONFIG points at the resolved effective config and must not be prefixed with the workspace');
   assert(!/matrix\.app\b/.test(build) && /index: \$\{\{ fromJSON\(needs\.detect\.outputs\.matrix\) \}\}/.test(build), 'app-distribution.yml: the matrix must carry only app indices');
   const detectOutputs = build.match(/^  detect:[\s\S]*?\n    outputs:\n([\s\S]*?)\n    steps:/m)?.[1] || '';
-  assert([...detectOutputs.matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1]).sort().join() === 'android_signing,app_present,matrix,wif_ready', 'app-distribution.yml: detect outputs must be flags and indices only, never config values');
+  assert([...detectOutputs.matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1]).sort().join() === 'android_signing,app_present,build_android,build_ios,matrix,wif_ready', 'app-distribution.yml: detect outputs must be flags and indices only, never config values');
   assert(!/needs\.detect\.outputs\.(?:app_dir|product_id|wif_provider|wif_service_account|flutter_version)/.test(build), 'app-distribution.yml: config values must not be read from job outputs');
+  assert(/scripts\/platforms\.mjs/.test(build) && /^  android:\n    needs: detect\n    if: .*needs\.detect\.outputs\.build_android == 'true'$/m.test(build) && /^  ios:\n    needs: detect\n    if: .*needs\.detect\.outputs\.build_ios == 'true'$/m.test(build), 'app-distribution.yml: each platform job must be gated by platforms.mjs (automatic runs: iOS only; Android only on a manual dispatch)');
   assert(!/git config --global|persist-credentials: true/.test(build), 'app-distribution.yml: credentials must not be persisted in global git config');
   const check = await readFile(new URL('app-distribution-check.yml', workflowRoot), 'utf8');
   assert(/scripts\/resolve-config\.mjs/.test(check), 'app-distribution-check.yml: must resolve the config through Baynex before reading it');
@@ -89,6 +90,7 @@ export async function validateKitLayout(kitRoot = new URL('../app-distribution/'
     assert(!/--testers\b|--groups\b/.test(workflow), `${file}: uploads must leave tester groups to Baynex`);
     const caller = await readFile(new URL(`templates/caller-${file}`, kitRoot), 'utf8');
     assert(caller.includes('id-token: write') && caller.includes(`workflows/${file}@v1`), `${file}: caller template invalid`);
+    if (file === 'app-distribution.yml') for (const template of [caller, await readFile(new URL('templates/caller-app-distribution-cross-owner.yml', kitRoot), 'utf8')]) assert(template.includes('platform: ${{ inputs.platform }}') && /options: \[android, ios, both\]/.test(template), `${file}: caller templates must offer the manual platform choice`);
     const referenced = [...new Set([...workflow.matchAll(/\bsecrets\.([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]))].sort();
     const declared = [...workflow.matchAll(/^ {6}([A-Z][A-Z0-9_]*):\n {8}required: false$/gm)].map((m) => m[1]).sort();
     assert(referenced.length > 0 && referenced.join() === declared.join(), `${file}: declared workflow_call secrets must equal referenced secrets`);
