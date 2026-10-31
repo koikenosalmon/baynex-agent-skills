@@ -86,7 +86,7 @@ cp ../baynex-agent-skills/app-distribution/templates/caller-app-distribution-che
 gh workflow run app-distribution-check.yml --ref qa -f ensure_bundle_ids=true -f register_devices=false
 ```
 
-Run log または Summary の表で WIF、Apple の 3 secret、Team ID、bundle ID、Firebase リリース、UDID を確認します。必要なら `register_devices=true` で端末を Apple に登録します。続いてアプリを `qa` に push し、Android / iOS のビルド、Firebase アップロード、Baynex リンクを確認します。`<appDir>/pubspec.yaml` がなければビルドは Summary に理由を表示してスキップします。`BAYNEX_PRODUCT_ID` 変数または `baynex/config.json` の `productId` があれば Baynex リンクが出ます。
+Run log または Summary の表で WIF、Apple の 3 secret、Team ID、bundle ID、Firebase リリース、UDID を確認します。必要なら `register_devices=true` で端末を Apple に登録します。続いてアプリを `qa` に push して iOS のビルド、Firebase アップロード、Baynex リンクを確認し、Android は `gh workflow run app-distribution.yml --ref qa -f platform=android` で確認します。`<appDir>/pubspec.yaml` がなければビルドは Summary に理由を表示してスキップします。`BAYNEX_PRODUCT_ID` 変数または `baynex/config.json` の `productId` があれば Baynex リンクが出ます。
 
 CI に署名済み Android APK が必要な場合は、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` を GitHub Actions Secrets に設定し、Gradle で `android/key.properties` を読むようにします。Apple 鍵は共有プロジェクト `baynex-shared` の Secret Manager から読み、CI の一時ファイルは 0600 で作成し終了時に消します。
 
@@ -154,6 +154,37 @@ Android / iOS の `flutter pub get` の前に設定し、同じジョブの `flu
 ```
 
 Android / iOS の両ジョブが `--build-number` に `run_number + buildNumberOffset` を渡します（`scripts/build-number.mjs`）。未指定は 0 で従来どおりです。`bootstrap.mjs` を再実行しても値は保持されます。
+
+## 配布する OS（自動は iOS、Android は手動）
+
+`push`（`qa`、`release/**` など）と `schedule` の実行は iOS だけをビルド・配布します。Android は手動実行のときだけビルド・配布します（`scripts/platforms.mjs`）。
+
+| きっかけ | ビルドする OS |
+|---|---|
+| `push` / `schedule` | Baynex の distribution-config の `platforms.automatic`（既定 `["ios"]`） |
+| `workflow_dispatch`（`platform: android`） | Android |
+| `workflow_dispatch`（`platform: ios`） | iOS |
+| `workflow_dispatch`（`platform: both`） | iOS と Android |
+| `workflow_dispatch`（入力なし: 古い caller） | iOS と Android |
+
+Android の配布:
+
+```sh
+gh workflow run app-distribution.yml --ref <ブランチ> -f platform=android
+```
+
+GitHub の画面では Actions → App Distribution → Run workflow → `platform` を選びます。caller テンプレートは `platform` の選択肢（`android` / `ios` / `both`、既定 `android`）を reusable workflow の `platform` 入力へ渡します。
+
+- 手動の実行は自動の実行と別の concurrency group（`…-manual-<platform>`）で待ちます。後から来た push が、待機中の手動の Android 実行を取り消すことはありません。
+- `platform` 入力のない古い caller では、Run workflow に選択肢が出ず、手動の実行は iOS と Android の両方をビルドします。`bootstrap.mjs` は既存の caller に `platform` 入力がないと ⚠️ で知らせます。
+
+### 反映の順番
+
+1. kit の `main` にマージする。
+2. 検証用のブランチの caller で `uses: …/app-distribution.yml@main` と `kit-ref: main` を揃え、push（iOS だけ）・`-f platform=android`（Android だけ）・入力なしの手動実行（両方）を 1 回ずつ確かめる。
+3. `v1` を同じコミットまで進める（`git diff origin/v1 origin/main` が空）。
+4. **`v1` を進めた後で**、既存の各 caller を新しいテンプレート（`workflow_dispatch.inputs.platform` と `platform: ${{ inputs.platform }}`）に更新する。`platform` を渡す caller は、`platform` 入力のない古い `v1` では起動時にエラーになる。
+5. 戻すときは、caller を更新済みのリポジトリでは `v1` を戻さず、Baynex の `platforms.automatic` を `["ios","android"]` にする。
 
 ## Flutter のバージョン固定
 
