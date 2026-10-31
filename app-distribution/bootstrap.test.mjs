@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { bootstrap, pairApps, PairingError, parsePairSpecs, reportBaynexRegistration } from './bootstrap.mjs';
+import { bootstrap, callerLacksPlatformInput, pairApps, PairingError, parsePairSpecs, reportBaynexRegistration } from './bootstrap.mjs';
 import { detectPrivateDependencies, githubGitDependencies, provisionDependencyCredential } from './private-dependencies.mjs';
 
 const offlineGh = () => ({ status: 1, stdout: '', stderr: '' });
@@ -352,4 +352,14 @@ test('bootstrap degrades to guidance when gh or the product id is unavailable', 
   assert.deepEqual(result, { repositoryId: undefined, ownerId: undefined, productId: '' });
   assert.match(lines.join('\n'), /取得できません/);
   assert.match(lines.join('\n'), /productId がありません/);
+});
+
+test('an existing App Distribution caller without the platform input is flagged for the template update', async () => {
+  const template = await readFile(new URL('./templates/caller-app-distribution.yml', import.meta.url), 'utf8');
+  const crossOwner = await readFile(new URL('./templates/caller-app-distribution-cross-owner.yml', import.meta.url), 'utf8');
+  assert.equal(callerLacksPlatformInput('app-distribution', template), false);
+  assert.equal(callerLacksPlatformInput('app-distribution', crossOwner), false);
+  assert.equal(callerLacksPlatformInput('app-distribution', 'on:\n  workflow_dispatch:\njobs:\n  distribute:\n    with:\n      kit-ref: v1\n'), true);
+  assert.equal(callerLacksPlatformInput('app-distribution', null), false, 'no caller yet: nothing to update');
+  assert.equal(callerLacksPlatformInput('app-distribution-check', 'on:\n  workflow_dispatch:\n'), false, 'the check workflow has no platform choice');
 });

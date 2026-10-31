@@ -173,7 +173,18 @@ Android の配布:
 gh workflow run app-distribution.yml --ref <ブランチ> -f platform=android
 ```
 
-GitHub の画面では Actions → App Distribution → Run workflow → `platform` を選びます。caller テンプレートは `platform` の選択肢（`android` / `ios` / `both`、既定 `android`）を reusable workflow の `platform` 入力へ渡します。`platform` 入力のない古い caller は、テンプレートの `workflow_dispatch.inputs` と `with: platform: ${{ inputs.platform }}` を足すと選べます。
+GitHub の画面では Actions → App Distribution → Run workflow → `platform` を選びます。caller テンプレートは `platform` の選択肢（`android` / `ios` / `both`、既定 `android`）を reusable workflow の `platform` 入力へ渡します。
+
+- 手動の実行は自動の実行と別の concurrency group（`…-manual-<platform>`）で待ちます。後から来た push が、待機中の手動の Android 実行を取り消すことはありません。
+- `platform` 入力のない古い caller では、Run workflow に選択肢が出ず、手動の実行は iOS と Android の両方をビルドします。`bootstrap.mjs` は既存の caller に `platform` 入力がないと ⚠️ で知らせます。
+
+### 反映の順番
+
+1. kit の `main` にマージする。
+2. 検証用のブランチの caller で `uses: …/app-distribution.yml@main` と `kit-ref: main` を揃え、push（iOS だけ）・`-f platform=android`（Android だけ）・入力なしの手動実行（両方）を 1 回ずつ確かめる。
+3. `v1` を同じコミットまで進める（`git diff origin/v1 origin/main` が空）。
+4. **`v1` を進めた後で**、既存の各 caller を新しいテンプレート（`workflow_dispatch.inputs.platform` と `platform: ${{ inputs.platform }}`）に更新する。`platform` を渡す caller は、`platform` 入力のない古い `v1` では起動時にエラーになる。
+5. 戻すときは、caller を更新済みのリポジトリでは `v1` を戻さず、Baynex の `platforms.automatic` を `["ios","android"]` にする。
 
 ## Flutter のバージョン固定
 

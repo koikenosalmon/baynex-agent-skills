@@ -149,6 +149,9 @@ export async function reportBaynexRegistration({ repo, run = defaultRun, product
   return { repositoryId, ownerId, productId };
 }
 
+/** An existing App Distribution caller from before the manual platform choice (BX-106). */
+export const callerLacksPlatformInput = (name, existing) => name === 'app-distribution' && typeof existing === 'string' && !existing.includes('platform: ${{ inputs.platform }}');
+
 export async function bootstrap({ project, repo, appleAccount, short, appDir, out = 'distribution/apps.json', dryRun = false, includeNew = false, pairs = [] }, deps = {}) {
   if (!projectPattern.test(project || '') || !repoPattern.test(repo || '') || !slugPattern.test(appleAccount || '')) throw new Error('project、repo、apple-account を確認してください');
   short ||= project.replace(/-(dev|prod|staging|qa)$/, '');
@@ -218,9 +221,10 @@ export async function bootstrap({ project, repo, appleAccount, short, appDir, ou
     const template = `caller-${name}${crossOwner ? '-cross-owner' : ''}.yml`;
     const content = await readFile(new URL(`templates/${template}`, import.meta.url), 'utf8');
     const destination = join(callerDir, `${name}.yml`);
-    if (!crossOwner) { console.log(`✅ 追加する caller workflow: ${destination}\n${content}`); continue; }
     let existing = null;
     try { existing = await readFile(destination, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (callerLacksPlatformInput(name, existing)) report('⚠️', `${destination}: platform 入力がありません。kit の v1 更新後に ${template} の workflow_dispatch.inputs.platform と platform: \${{ inputs.platform }} を反映してください（反映までは手動実行で iOS と Android の両方をビルド）`);
+    if (!crossOwner) { console.log(`✅ 追加する caller workflow: ${destination}\n${content}`); continue; }
     if (existing === content) report('✅', `${destination}: 別オーナー用 caller は最新です`);
     else if (existing !== null && !/^\s*secrets:\s*inherit\s*(?:#.*)?$/m.test(existing)) report('⚠️', `${destination}: 既存の caller を残しました。別オーナーのため secrets を ${template} のように明示してください`);
     else if (dryRun) report('⚠️', `${destination}: 別オーナー用 caller（${template}）を書き込み予定`);

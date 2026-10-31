@@ -6,9 +6,10 @@ import { join } from 'node:path';
 import { automaticPlatforms, runCli, selectPlatforms } from './platforms.mjs';
 
 test('automatic runs build iOS only by default; Android waits for a manual dispatch', () => {
-  for (const eventName of ['push', 'schedule']) {
-    assert.deepEqual(selectPlatforms({ eventName }), { ios: true, android: false, trigger: 'automatic' });
-  }
+  assert.deepEqual(selectPlatforms({ eventName: 'push' }), { ios: true, android: false, trigger: 'automatic' });
+  assert.deepEqual(selectPlatforms({ eventName: 'schedule' }), { ios: true, android: false, trigger: 'automatic' });
+  assert.deepEqual(selectPlatforms({ eventName: 'schedule', requested: 'both', automatic: ['ios'] }), { ios: true, android: false, trigger: 'automatic' }, 'a schedule ignores the dispatch input');
+  assert.deepEqual(selectPlatforms({ eventName: 'schedule', automatic: ['ios', 'android'] }), { ios: true, android: true, trigger: 'automatic' }, 'a schedule follows Baynex automatic platforms');
   assert.deepEqual(selectPlatforms({ eventName: 'push', requested: 'android' }), { ios: true, android: false, trigger: 'automatic' }, 'a push ignores the dispatch input');
 });
 

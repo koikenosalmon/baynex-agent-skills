@@ -50,7 +50,8 @@ env:
   DISTRIBUTION_CONFIG: ${{ inputs.config-path }}
 
 concurrency:
-  group: app-distribution-${{ github.ref }}
+  # A manual run waits in its own group: a later push replaces only a pending automatic run, never a manual one.
+  group: app-distribution-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', inputs.platform || 'both') || 'auto' }}
   cancel-in-progress: false
 
 permissions:
