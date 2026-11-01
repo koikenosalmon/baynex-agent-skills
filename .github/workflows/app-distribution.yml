@@ -314,6 +314,11 @@ jobs:
       matrix:
         index: ${{ fromJSON(needs.detect.outputs.matrix) }}
     name: iOS / app ${{ matrix.index }}
+    # The self-hosted runner lives under /Volumes/External SSD. Quote the temporary
+    # script path while preserving the runner's existing /bin/bash -e contract.
+    defaults:
+      run:
+        shell: '/bin/bash -e "{0}"'
     steps:
       - name: Check self-hosted Mac prerequisites
         if: runner.environment == 'self-hosted'
